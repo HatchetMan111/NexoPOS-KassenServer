@@ -384,6 +384,12 @@ echo "systemctl $*" >> "$HS/calls.log"
 unitdir="$MK/etc/systemd/system"
 case "${1:-}" in
     daemon-reload) exit 0 ;;
+    list-unit-files)
+        # php*-fpm.service-Ermittlung im Inner-Script
+        echo "php8.4-fpm.service enabled"
+        echo "nginx.service enabled"
+        echo "mariadb.service enabled"
+        exit 0 ;;
     enable) mkdir -p "$unitdir"; echo "${2:-}" >> "$HS/enabled_units"; exit 0 ;;
     start|restart)
         for u in "${@:2}"; do
@@ -422,18 +428,20 @@ if [[ "${1:-}" == "install" ]]; then
                 [[ -e "$INNERBIN_DIR/npm" ]] || ln -sf "$MK/mock-npm" "$INNERBIN_DIR/npm" ;;
             git)
                 [[ -e "$INNERBIN_DIR/git" ]] || ln -sf "$MK/mock-git" "$INNERBIN_DIR/git" ;;
-            php8.4-cli|php*)
-                # Debian-Paket php*-cli bringt /usr/bin/php; composer/node/curl/git
-                # sind nach dem Basis-apt da (realistischer Zustand nach apt-get install)
+            php*)
+                # Debian-Pakete php-fpm/php-cli bringen /usr/bin/php; composer/node/
+                # curl/git sind nach dem Basis-apt da (realistischer apt-Zustand)
                 for t in php composer node npm npx curl git id chown useradd; do
                     [[ -e "$INNERBIN_DIR/$t" ]] || ln -sf "$MK/mock-$t" "$INNERBIN_DIR/$t"
                 done
                 mkdir -p "$MK/usr/local/bin"
                 unitdir="$MK/etc/systemd/system"
-                mkdir -p "$unitdir"
+                mkdir -p "$unitdir" "$MK/run/php"
                 for u in nginx php8.4-fpm mariadb; do
                     [[ -f "$unitdir/$u.service" ]] || printf '[Unit]\nDescription=mock %s\n' "$u" > "$unitdir/$u.service"
-                done ;;
+                done
+                # FPM-Socket, wie ihn das echte Paket anlegt
+                : > "$MK/run/php/php8.4-fpm.sock" ;;
         esac
     done
 fi
@@ -558,6 +566,8 @@ if [[ "${1:-}" == "-r" || "${1:-}" == "-d" ]]; then
     esac
     exit 0
 fi
+
+if [[ "${1:-}" == "-v" ]]; then echo "PHP 8.4.11 (cli) (mock)"; exit 0; fi
 
 if [[ "${1:-}" == "composer-setup.php" ]]; then
     # --install-dir/--filename überspringen: composer in die Fakebin legen
@@ -726,7 +736,8 @@ assert_fcontains "$MK/opt/nexopos/.env" "DB_DATABASE"
 assert_fcontains "$MK/opt/nexopos/.env" "APP_ENV=production"
 assert_file "$MK/opt/nexopos/public/build/assets/app.css"
 assert_file "$MK/etc/nginx/sites-available/nexopos"
-assert_fcontains "$MK/etc/nginx/sites-available/nexopos" "fastcgi_pass"
+assert_fcontains "$MK/etc/nginx/sites-available/nexopos" "fastcgi_pass unix:"
+assert_fregex "$MK/etc/nginx/sites-available/nexopos" "fastcgi_pass unix:/.*php.*-fpm\\.sock"
 
 t "Install: pct create bekommt onboot/nesting/unprivileged"
 assert_fregex "$HS/ct_150.create" "ARGS=.*--onboot 1"

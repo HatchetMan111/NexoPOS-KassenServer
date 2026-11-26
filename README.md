@@ -12,9 +12,9 @@ bash -c "$(wget -qLO - https://raw.githubusercontent.com/HatchetMan111/NexoPOS-P
 | Komponente | Version / Detail |
 |---|---|
 | Basis | Debian 12/13 LXC, unprivileged, `nesting=1`, `onboot=1` |
-| PHP | 8.4-FPM (Debian 13) – Laravel 12 braucht ≥ 8.2 |
+| PHP | FPM aus der Distro (Debian 12 → 8.2, 13 → 8.4); Laravel 12 braucht ≥ 8.2, Socket wird dynamisch ermittelt |
 | Datenbank | MariaDB, eigene DB + Benutzer, Passwort zufällig |
-| Webserver | Nginx auf Port **8080**, `fastcgi_pass` auf php8.4-fpm-Socket |
+| Webserver | Nginx auf Port **8080**, `fastcgi_pass` auf den ermittelten FPM-Socket |
 | Frontend | Vue/Vite-Build im CT (Node 24, nur einmalig beim Install/Update) |
 | Dienste | `nexopos-scheduler` (`schedule:work`) + `nexopos-queue` (`queue:work`), beide `Restart=always` |
 | Setup | headless per `php artisan ns:setup` (kein Browser-Wizard nötig) |
@@ -69,7 +69,7 @@ lizenziert und sind nicht im Repo. Der Installer ändert daran nichts.
 ## Tests
 
 ```bash
-bash harness/run.sh     # 69 Assertions, Mock-Proxmox (unshare -rm)
+bash harness/run.sh     # 70 Assertions, Mock-Proxmox (unshare -rm)
 ```
 
 Der Harness mockt `pct/pveam/pvesh`, apt, systemd, MariaDB, PHP, Composer,

@@ -260,8 +260,8 @@ export LANG=C.UTF-8 LC_ALL=C.UTF-8
 apt-get update -qq
 apt-get install -y -qq --no-install-recommends \
   curl wget ca-certificates gnupg lsb-release openssl \
-  php8.4-fpm php8.4-cli php8.4-mysql php8.4-mbstring php8.4-intl \
-  php8.4-curl php8.4-gd php8.4-zip php8.4-bcmath php8.4-xml \
+  php-fpm php-cli php-mysql php-mbstring php-intl \
+  php-curl php-gd php-zip php-bcmath php-xml \
   mariadb-server mariadb-client nginx \
   git unzip >/dev/null
 
@@ -278,10 +278,25 @@ if ! command -v node >/dev/null 2>&1 || [ "$(node -v 2>/dev/null | cut -c2- | cu
 fi
 log "node: $(node -v 2>/dev/null || echo fehlt)  npm: $(npm -v 2>/dev/null || echo fehlt)"
 
-log "=== PHP-FPM 8.4 ==="
-# Debian 12 bringt 8.2 (OK), Debian 13 bringt 8.4 (OK) – FPM-Socket für Nginx
-systemctl enable php8.4-fpm >/dev/null 2>&1 || true
-systemctl start php8.4-fpm || true
+log "=== PHP-FPM ==="
+# Debian 12 liefert PHP 8.2, Debian 13 liefert 8.4 – Laravel 12 verlangt >= 8.2,
+# beide genügen. Deshalb Meta-Pakete + dynamischer Dienst-/Socket-Name
+# (kein Sury-Repo nötig; php8.4-* existiert auf Debian 12 NICHT).
+php -v 2>/dev/null | head -1 || true
+FPM_SVC="$(systemctl list-unit-files 'php*-fpm.service' --no-legend 2>/dev/null | awk '{print $1}' | head -1 || true)"
+[ -n "$FPM_SVC" ] || FPM_SVC="php-fpm"
+systemctl enable "$FPM_SVC" >/dev/null 2>&1 || true
+systemctl start "$FPM_SVC" || true
+PHP_SOCK=""
+for _i in $(seq 1 15); do
+  PHP_SOCK="$(ls /run/php/php*-fpm.sock 2>/dev/null | head -1 || true)"
+  [ -n "$PHP_SOCK" ] && break
+  sleep 1
+done
+if [ -z "$PHP_SOCK" ]; then
+  PHP_SOCK="/run/php/php$(php -r 'echo PHP_MAJOR_VERSION.".".PHP_MINOR_VERSION;' 2>/dev/null || echo 8.2)-fpm.sock"
+fi
+log "PHP-FPM: ${FPM_SVC}  Socket: ${PHP_SOCK}"
 
 log "=== MariaDB ==="
 systemctl enable mariadb >/dev/null 2>&1 || true
@@ -404,7 +419,7 @@ server {
 
     location ~ \.php$ {
         include snippets/fastcgi-php.conf;
-        fastcgi_pass unix:/run/php/php8.4-fpm.sock;
+        fastcgi_pass unix:${PHP_SOCK};
     }
 
     location ~ /\.(?!well-known).* {
