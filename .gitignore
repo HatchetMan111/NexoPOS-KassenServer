@@ -1,0 +1,4 @@
+# NexoPOS Setup-Logs / Build-Artefakte
+*.log
+node_modules/
+.env
