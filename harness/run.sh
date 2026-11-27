@@ -676,7 +676,6 @@ run_installer() {
         bash "$SCRIPT" "$@" > "$CUR_DIR/out.log" 2>&1 )
     echo $?
 }
-# shellcheck disable=SC2120
 run_installer_bash_c() { # simuliert: bash -c "$(wget …)" -- --update → $0 = "--"
     local content
     content="$(cat "$SCRIPT")"
@@ -685,6 +684,7 @@ run_installer_bash_c() { # simuliert: bash -c "$(wget …)" -- --update → $0 =
         bash -c "$content" -- "$@" > "$CUR_DIR/out.log" 2>&1 )
     echo $?
 }
+# shellcheck disable=SC2120
 run_installer_nonroot() {
     ( env -i PATH="$HOSTBIN:/usr/sbin:/usr/bin:/sbin:/bin" \
         HARNESS_STATE="$HS" HOME=/root TERM=dumb LANG=C.UTF-8 \
