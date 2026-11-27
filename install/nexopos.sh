@@ -387,14 +387,23 @@ fi
 log "App bei $(git -C "$APP_DIR" rev-parse --short HEAD)"
 
 log "=== Composer ==="
-# Live-Grube: der offizielle Installer legte composer nach /usr/local/bin, das im
-# pct-exec-PATH fehlte → "composer: command not found" mitten im Setup. apt-first
-# (/usr/bin/composer, Debian 13 = Composer 2.x), danach offizieller Installer und
-# zuletzt composer.phar — jeder Schritt mit Erfolgsprüfung.
+# Live-Grube 4: `composer --version` HÄNGT als root stumm — Composer fragt
+# "Continue as root/super user?", die Frage geht nach stderr (unterdrückt) und
+# stdout ist von $(…) geschluckt → unsichtbares Warten auf Eingabe.
+# Daher: ALLE composer-Aufrufe mit COMPOSER_ALLOW_SUPERUSER=1, --no-interaction
+# und timeout; unbrauchbare Installationen werden erkannt und ersetzt.
+composer_ok() {
+  timeout 60 env COMPOSER_ALLOW_SUPERUSER=1 composer --version \
+    --no-interaction >/dev/null 2>&1
+}
+if command -v composer >/dev/null 2>&1 && ! composer_ok; then
+  warn_inner "vorhandener Composer unbrauchbar: $(command -v composer) – wird ersetzt."
+  rm -f "$(command -v composer)" 2>/dev/null || true
+fi
 if ! command -v composer >/dev/null 2>&1; then
   apt_install "composer+unzip" composer unzip || true
 fi
-if ! command -v composer >/dev/null 2>&1; then
+if ! composer_ok; then
   log "apt-Composer nicht verfügbar – nutze offiziellen Installer ..."
   EXPECTED_CHECKSUM="$(php -r 'copy("https://composer.github.io/installer.sig", "php://stdout");' 2>/dev/null || true)"
   php -r "copy('https://getcomposer.org/installer', 'composer-setup.php');" 2>/dev/null || true
@@ -410,19 +419,19 @@ if ! command -v composer >/dev/null 2>&1; then
     fi
   fi
 fi
-if ! command -v composer >/dev/null 2>&1; then
+if ! composer_ok; then
   log "Letzter Fallback: composer-stable.phar direkt ..."
   curl -fsSL --retry 3 --retry-delay 3 --connect-timeout 20 --max-time 300 \
     https://getcomposer.org/composer-stable.phar -o /usr/local/bin/composer.phar
-  printf '#!/bin/sh\nexec php /usr/local/bin/composer.phar "$@"\n' > /usr/local/bin/composer
+  printf '#!/bin/sh\nCOMPOSER_ALLOW_SUPERUSER=1 exec php /usr/local/bin/composer.phar --no-interaction "$@"\n' > /usr/local/bin/composer
   chmod +x /usr/local/bin/composer /usr/local/bin/composer.phar
 fi
-if ! command -v composer >/dev/null 2>&1; then
-  err "Composer ist nicht verfügbar (apt, Installer und phar-Fallback scheiterten)."
-  err "Diagnose: apt-get install -y composer ; composer --version ; php -v"
+if ! composer_ok; then
+  err "Composer ist nicht lauffähig (apt, Installer und phar-Fallback scheiterten)."
+  err "Diagnose: COMPOSER_ALLOW_SUPERUSER=1 composer --version ; php -v"
   exit 1
 fi
-log "composer: $(composer --version 2>/dev/null | head -1)"
+log "composer: $(timeout 60 env COMPOSER_ALLOW_SUPERUSER=1 composer --version --no-interaction 2>/dev/null | head -1 || true)"
 cd "$APP_DIR"
 log "composer install (kann einige Minuten dauern) ..."
 if ! timeout 1800 env COMPOSER_ALLOW_SUPERUSER=1 COMPOSER_PROCESS_TIMEOUT=600 \

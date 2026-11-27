@@ -78,7 +78,7 @@ lizenziert und sind nicht im Repo. Der Installer ändert daran nichts.
 ## Tests
 
 ```bash
-bash harness/run.sh     # 78 Assertions, Mock-Proxmox (unshare -rm)
+bash harness/run.sh     # 79 Assertions, Mock-Proxmox (unshare -rm)
 ```
 
 Der Harness mockt `pct/pveam/pvesh`, apt, systemd, MariaDB, PHP, Composer,
@@ -98,6 +98,11 @@ Alle Netz-Schritte haben harte Zeitlimits und schreiben in `/var/log/nexopos-apt
 (30 min), `npm install`/`npm run build` (30/15 min), Downloads mit `--max-time`.
 Vor jedem Schritt steht eine Fortschrittszeile („apt: installiere …"), damit ein
 hängender Lauf sofort als solcher erkennbar ist.
+
+Composer läuft als root nur mit `COMPOSER_ALLOW_SUPERUSER=1 --no-interaction`:
+ohne diese Flags fragt Composer „Continue as root/super user?" — die Frage geht
+nach stderr und stdout ist in `$(…)` gefangen, das Script wirkt dann stumm
+hängend. Eine unbrauchbare Vorinstallation wird erkannt und ersetzt.
 
 ## Bekannte Punkte
 

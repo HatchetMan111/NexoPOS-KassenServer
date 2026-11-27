@@ -587,10 +587,19 @@ EOF
 
 cat > "$MK/mock-composer" <<'EOF'
 #!/usr/bin/env bash
-# composer-Mock: install → ok
+# composer-Mock: verhält sich wie das Original als root – ohne
+# COMPOSER_ALLOW_SUPERUSER wartet/verweigert es (hier: exit 1 statt hängen).
 set -u
 HS="${HARNESS_STATE:?}"
 echo "composer $*" >> "$HS/calls.log"
+if [[ -z "${COMPOSER_ALLOW_SUPERUSER:-}" ]]; then
+    echo "Do not run Composer as root/super user!" >&2
+    exit 1
+fi
+case "${1:-}" in
+    --version) echo "Composer version 2.8.4 (mock)"; exit 0 ;;
+    install)   exit 0 ;;
+esac
 exit 0
 EOF
 
@@ -741,6 +750,7 @@ assert_out "HTTP / = 200"
 assert_out "http://10.120.5.88:8080"
 assert_out "NexoPOS ist installiert"
 assert_out "Benutzer admin / Passwort TestPass123"
+assert_out "composer: Composer version 2.8.4 (mock)"
 assert_calls 1 "pvesh get /cluster/nextid"
 assert_calls 1 "pct create 150"
 assert_file "$MK/etc/systemd/system/nexopos-scheduler.service"
