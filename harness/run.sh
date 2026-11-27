@@ -677,6 +677,14 @@ run_installer() {
     echo $?
 }
 # shellcheck disable=SC2120
+run_installer_bash_c() { # simuliert: bash -c "$(wget …)" -- --update → $0 = "--"
+    local content
+    content="$(cat "$SCRIPT")"
+    ( unshare -rm env -i PATH="$HOSTBIN:/usr/sbin:/usr/bin:/sbin:/bin" \
+        HARNESS_STATE="$HS" HOME=/root TERM=dumb LANG=C.UTF-8 \
+        bash -c "$content" -- "$@" > "$CUR_DIR/out.log" 2>&1 )
+    echo $?
+}
 run_installer_nonroot() {
     ( env -i PATH="$HOSTBIN:/usr/sbin:/usr/bin:/sbin:/bin" \
         HARNESS_STATE="$HS" HOME=/root TERM=dumb LANG=C.UTF-8 \
@@ -821,6 +829,12 @@ echo "FAIL_DB_INIT" > "$HS/db_init_fail"
 ec=$(run_installer --yes --admin-pass TestPass123)
 assert_exit 1 "$ec"
 assert_out "nexopos_options"
+
+t "Update: Einzeiler-Form '-- --update' (der -- ist Args-Trenner)"
+seed_ct
+ec=$(run_installer_bash_c --update)
+assert_exit 0 "$ec"
+assert_out "Update auf CT 150"
 
 t "Update: --id erzwingt CT-ID"
 seed_ct

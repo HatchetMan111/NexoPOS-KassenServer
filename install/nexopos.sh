@@ -120,6 +120,7 @@ while [[ $# -gt 0 ]]; do
     --admin-pass)  ADMIN_PASS="$2"; shift 2 ;;
     --store-name)  STORE_NAME="$2"; shift 2 ;;
     --yes|-y)     ASSUME_YES=1; shift ;;
+    --)           shift ;;   # Standard-Trenner: "bash -c ... -- --update" belegt $0 mit "--"
     -h|--help)    sed -n '2,42p' "$0"; exit 0 ;;
     *)            die "Unbekannte Option: $1 (siehe --help)" ;;
   esac

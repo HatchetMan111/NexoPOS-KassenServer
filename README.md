@@ -38,6 +38,13 @@ bash -c "$(wget -qLO - <RAW-URL>)" -- --status
 bash -c "$(wget -qLO - <RAW-URL>)" -- --uninstall
 ```
 
+Der `--`-Trenner vor den Optionen ist optional (beide Formen gehen):
+
+```bash
+... install/nexopos.sh" -- --update      # Einzeiler-Form
+... install/nexopos.sh" --update         # geht auch
+```
+
 ### Optionen
 
 | Flag | Standard | Bedeutung |
@@ -71,7 +78,7 @@ lizenziert und sind nicht im Repo. Der Installer ändert daran nichts.
 ## Tests
 
 ```bash
-bash harness/run.sh     # 76 Assertions, Mock-Proxmox (unshare -rm)
+bash harness/run.sh     # 78 Assertions, Mock-Proxmox (unshare -rm)
 ```
 
 Der Harness mockt `pct/pveam/pvesh`, apt, systemd, MariaDB, PHP, Composer,
