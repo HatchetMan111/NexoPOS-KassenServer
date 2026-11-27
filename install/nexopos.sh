@@ -2,7 +2,7 @@
 # =============================================================================
 # NexoPOS Proxmox LXC Installer (Community-Scripts-Stil)
 #
-# Repo:        https://github.com/HatchetMan111/NexoPOS-Proxmox
+# Repo:        https://github.com/HatchetMan111/NexoPOS-KassenServer
 # Upstream:    https://github.com/Blair2004/NexoPOS  (GPL-3.0, Core 6.3.0)
 # App:         NexoPOS – Laravel-12-Kassensystem (POS, Inventar, Kunden,
 #              Buchhaltung, Reports) mit Vue.js-Frontend
@@ -11,7 +11,7 @@
 # Web-UI:      http://<CT-IP>:8080
 #
 # Einzeiler:
-#   bash -c "$(wget -qLO - https://raw.githubusercontent.com/HatchetMan111/NexoPOS-Proxmox/main/install/nexopos.sh)"
+#   bash -c "$(wget -qLO - https://raw.githubusercontent.com/HatchetMan111/NexoPOS-KassenServer/main/install/nexopos.sh)"
 #
 # Modi:
 #   (keine)        Neu-Installation (nächste freie CT-ID)
@@ -57,7 +57,7 @@ CT_ONBOOT=1
 ASSUME_YES=0
 MODE="install"
 # Roh-URL des Installers (für Reinstall-Hinweise in der Fehlerkette)
-ONE_LINER="https://raw.githubusercontent.com/HatchetMan111/NexoPOS-Proxmox/main/install/nexopos.sh"
+ONE_LINER="https://raw.githubusercontent.com/HatchetMan111/NexoPOS-KassenServer/main/install/nexopos.sh"
 
 # Admin-/Store-Defaults (Konsistenz mit Inner-Script)
 ADMIN_USER="admin"
@@ -630,7 +630,7 @@ summary() {
     echo -e "  🔑 Login     : Benutzer ${ADMIN_USER} (Passwort beim Setup gesetzt)"
   fi
   echo -e "  📜 Logs      : pct exec ${CTID} -- journalctl -u ${APP_NAME}-queue -n 50 --no-pager"
-  echo -e "  ♻️  Update    : bash -c \"\$(wget -qLO - https://raw.githubusercontent.com/HatchetMan111/NexoPOS-Proxmox/main/install/nexopos.sh)\" -- --update"
+  echo -e "  ♻️  Update    : bash -c \"\$(wget -qLO - https://raw.githubusercontent.com/HatchetMan111/NexoPOS-KassenServer/main/install/nexopos.sh)\" -- --update"
   echo -e "  🗑️  Deinstall: ... -- --uninstall"
   echo -e "  🔄 Reboot-Test: pct reboot ${CTID}  (danach ist die App via systemd wieder da)"
   echo ""

@@ -4,7 +4,7 @@ Einzeiler-Installer für [NexoPOS](https://github.com/Blair2004/NexoPOS) (GPL-3.
 Debian-LXC auf Proxmox VE. Kein Docker, kein Node im Laufzeitbetrieb.
 
 ```
-bash -c "$(wget -qLO - https://raw.githubusercontent.com/HatchetMan111/NexoPOS-Proxmox/main/install/nexopos.sh)"
+bash -c "$(wget -qLO - https://raw.githubusercontent.com/HatchetMan111/NexoPOS-KassenServer/main/install/nexopos.sh)"
 ```
 
 ## Was installiert wird
