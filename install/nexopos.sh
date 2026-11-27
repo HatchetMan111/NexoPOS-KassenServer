@@ -132,6 +132,15 @@ fi
 command -v pct >/dev/null 2>&1 || die "pct nicht gefunden – läuft das hier auf einem Proxmox-Host?"
 command -v wget >/dev/null 2>&1 || { apt-get update -qq && apt-get install -y -qq wget ca-certificates; }
 
+# ns:setup wird INTERAKTIV (ask()), wenn ein Pflichtwert fehlt – im pct exec ohne
+# TTY endet das still als "installation aborted". Daher immer ein Passwort setzen.
+if [ -z "${ADMIN_PASS:-}" ]; then
+  ADMIN_PASS="$(openssl rand -base64 24 | tr -dc 'A-Za-z0-9' | head -c 16)"
+  GENERATED_PASS=1
+else
+  GENERATED_PASS=0
+fi
+
 SETUP_LOG="/tmp/${APP_NAME}-setup.log"
 
 # ---------- CT-Helfer --------------------------------------------------------
@@ -239,6 +248,7 @@ cat <<'INNEREOF'
 set -Eeuo pipefail
 log(){ echo "[$(date '+%H:%M:%S')] $*"; }
 err(){ echo "[FEHLER] $*" >&2; }
+warn_inner(){ echo "[WARNUNG] $*" >&2; }
 trap 'echo "[FEHLER] Exit $? in Zeile $LINENO" >&2' ERR
 
 PORT="${PORT:-8080}"
@@ -257,6 +267,15 @@ STORE_NAME="${STORE_NAME:-NexoPOS}"
 log "=== Basis-Pakete ==="
 export DEBIAN_FRONTEND=noninteractive
 export LANG=C.UTF-8 LC_ALL=C.UTF-8
+# Live-Grube: der PATH von `pct exec` enthält /usr/local/bin nicht zwangsläufig –
+# dadurch waren node/composer nach dem Symlink dorthin "command not found".
+# PATH nur ERGÄNZEN (nie überschreiben): vorhandene Einträge bleiben vorn stehen.
+for _p in /usr/local/sbin /usr/local/bin; do
+  case ":${PATH:-}:" in
+    *":$_p:"*) ;;
+    *) export PATH="${PATH:-}${PATH:+:}$_p" ;;
+  esac
+done
 apt-get update -qq
 apt-get install -y -qq --no-install-recommends \
   curl wget ca-certificates gnupg lsb-release openssl \
@@ -265,18 +284,42 @@ apt-get install -y -qq --no-install-recommends \
   mariadb-server mariadb-client nginx \
   git unzip >/dev/null
 
-log "=== Node.js 24 (einmaliger Asset-Build) ==="
-if ! command -v node >/dev/null 2>&1 || [ "$(node -v 2>/dev/null | cut -c2- | cut -d. -f1)" -lt 24 ]; then
+log "=== Node.js (einmaliger Asset-Build) ==="
+# Nur für den Vite-Build nötig, kein Laufzeitbedarf der App.
+# Asset-Build verlangt Node >= 20.19 (Vite 6 / Tailwind 4).
+# apt-first: das Debian-Paket ist baseline-kompatibel zur Host-CPU. Das
+# nodejs.org-Binary setzt x86-64-v2 voraus und crasht auf älteren CPUs
+# still (genau das passierte im Live-Lauf: /usr/local/bin/node vorhanden,
+# `node -v` liefert nichts).
+node_major() {
+  command -v node >/dev/null 2>&1 || { echo 0; return 0; }
+  node -v 2>/dev/null | sed 's/^v//' | cut -d. -f1 | grep -E '^[0-9]+$' || echo 0
+}
+NODE_OK=0
+[ "$(node_major)" -ge 20 ] && NODE_OK=1
+if [ "$NODE_OK" -eq 0 ]; then
+  log "installiere nodejs/npm aus dem Debian-Repo ..."
+  apt-get install -y -qq --no-install-recommends nodejs npm >/dev/null 2>&1 || true
+  [ "$(node_major)" -ge 20 ] && NODE_OK=1
+fi
+if [ "$NODE_OK" -eq 0 ]; then
+  log "apt-Node unbrauchbar – lade offizielles Binary v24.11.1 als Fallback ..."
   ARCH="$(dpkg --print-architecture)"
   case "$ARCH" in amd64) NARCH=x64;; arm64) NARCH=arm64;; *) NARCH=x64;; esac
   mkdir -p /opt/node24
-  curl -fsSL "https://nodejs.org/dist/v24.11.1/node-v24.11.1-linux-${NARCH}.tar.xz" -o /tmp/node.tar.xz
+  curl -fsSL --retry 3 --retry-delay 3 \
+    "https://nodejs.org/dist/v24.11.1/node-v24.11.1-linux-${NARCH}.tar.xz" -o /tmp/node.tar.xz
   tar -xJf /tmp/node.tar.xz -C /opt/node24 --strip-components=1
-  ln -sf /opt/node24/bin/node /usr/local/bin/node
-  ln -sf /opt/node24/bin/npm /usr/local/bin/npm
-  ln -sf /opt/node24/bin/npx /usr/local/bin/npx
+  for b in node npm npx; do ln -sf "/opt/node24/bin/$b" "/usr/local/bin/$b"; done
+  [ "$(node_major)" -ge 20 ] && NODE_OK=1
 fi
-log "node: $(node -v 2>/dev/null || echo fehlt)  npm: $(npm -v 2>/dev/null || echo fehlt)"
+if [ "$NODE_OK" -eq 0 ]; then
+  err "Node.js ist nicht lauffähig (apt und Binary-Fallback scheiterten)."
+  err "Diagnose: apt-get install -y nodejs npm ; node -v ; /opt/node24/bin/node -v"
+  err "Auf alten CPUs crasht das offizielle Node-Binary (kein x86-64-v2)."
+  exit 1
+fi
+log "node: $(node -v)  npm: $(npm -v 2>/dev/null || echo fehlt)"
 
 log "=== PHP-FPM ==="
 # Debian 12 liefert PHP 8.2, Debian 13 liefert 8.4 – Laravel 12 verlangt >= 8.2,
@@ -320,17 +363,43 @@ else
 fi
 log "App bei $(git -C "$APP_DIR" rev-parse --short HEAD)"
 
-log "=== Composer-Abhängigkeiten ==="
+log "=== Composer ==="
+# Live-Grube: der offizielle Installer legte composer nach /usr/local/bin, das im
+# pct-exec-PATH fehlte → "composer: command not found" mitten im Setup. apt-first
+# (/usr/bin/composer, Debian 13 = Composer 2.x), danach offizieller Installer und
+# zuletzt composer.phar — jeder Schritt mit Erfolgsprüfung.
 if ! command -v composer >/dev/null 2>&1; then
-  EXPECTED_CHECKSUM="$(php -r 'copy("https://composer.github.io/installer.sig", "php://stdout");')"
-  php -r "copy('https://getcomposer.org/installer', 'composer-setup.php');"
-  ACTUAL_CHECKSUM="$(php -r "echo hash_file('sha384', 'composer-setup.php');")"
-  if [ "$EXPECTED_CHECKSUM" != "$ACTUAL_CHECKSUM" ]; then
-    err "Composer-Installer-Checksumme ungültig"; rm -f composer-setup.php; exit 1
-  fi
-  php composer-setup.php --install-dir=/usr/local/bin --filename=composer --quiet
-  rm -f composer-setup.php
+  apt-get install -y -qq --no-install-recommends composer unzip >/dev/null 2>&1 || true
 fi
+if ! command -v composer >/dev/null 2>&1; then
+  log "apt-Composer nicht verfügbar – nutze offiziellen Installer ..."
+  EXPECTED_CHECKSUM="$(php -r 'copy("https://composer.github.io/installer.sig", "php://stdout");' 2>/dev/null || true)"
+  php -r "copy('https://getcomposer.org/installer', 'composer-setup.php');" 2>/dev/null || true
+  if [ -f composer-setup.php ]; then
+    ACTUAL_CHECKSUM="$(php -r "echo hash_file('sha384', 'composer-setup.php');" 2>/dev/null || true)"
+    if [ -n "$EXPECTED_CHECKSUM" ] && [ -n "$ACTUAL_CHECKSUM" ] && [ "$EXPECTED_CHECKSUM" != "$ACTUAL_CHECKSUM" ]; then
+      err "Composer-Installer-Checksumme ungültig – verwerfe Download."
+      rm -f composer-setup.php
+    else
+      [ -n "$EXPECTED_CHECKSUM" ] || warn_inner "Signatur nicht abrufbar – prüfe Installer-Hash nicht."
+      php composer-setup.php --install-dir=/usr/local/bin --filename=composer --quiet || true
+      rm -f composer-setup.php
+    fi
+  fi
+fi
+if ! command -v composer >/dev/null 2>&1; then
+  log "Letzter Fallback: composer-stable.phar direkt ..."
+  curl -fsSL --retry 3 --retry-delay 3 https://getcomposer.org/composer-stable.phar \
+    -o /usr/local/bin/composer.phar
+  printf '#!/bin/sh\nexec php /usr/local/bin/composer.phar "$@"\n' > /usr/local/bin/composer
+  chmod +x /usr/local/bin/composer /usr/local/bin/composer.phar
+fi
+if ! command -v composer >/dev/null 2>&1; then
+  err "Composer ist nicht verfügbar (apt, Installer und phar-Fallback scheiterten)."
+  err "Diagnose: apt-get install -y composer ; composer --version ; php -v"
+  exit 1
+fi
+log "composer: $(composer --version 2>/dev/null | head -1)"
 cd "$APP_DIR"
 COMPOSER_ALLOW_SUPERUSER=1 composer install --no-dev --prefer-dist --no-interaction --no-progress >/dev/null
 log "composer install fertig."
@@ -389,6 +458,16 @@ if ! php artisan ns:setup \
     --admin_password="$ADMIN_PASS" \
     --language=de
 fi
+# Harte Verifikation: existiert die Options-Tabelle? Sonst war ns:setup ein
+# stiller No-Op (fehlende Pflichtwerte / interaktiver Abbruch) und die UI
+# würde nur den Setup-Wizard zeigen.
+if ! mariadb -N -B -e "SELECT 1 FROM \`${DB_NAME}\`.nexopos_options LIMIT 1" 2>/dev/null | grep -q 1; then
+  err "NexoPOS-Setup hat die Datenbank nicht initialisiert (Tabelle nexopos_options fehlt)."
+  err "Diagnose: php artisan ns:setup --store_name=... --admin_username=... --admin_email=... --admin_password=..."
+  exit 1
+fi
+log "Datenbank initialisiert (nexopos_options vorhanden)."
+
 # Store-Namen setzt ns:setup NICHT (Bekannt: Option nur Default) → nachziehen
 php artisan tinker --execute="ns()->option->set('ns_store_name', '${STORE_NAME}');" >/dev/null 2>&1 || true
 php artisan config:clear >/dev/null 2>&1 || true
@@ -624,11 +703,12 @@ summary() {
   echo -e "${GREEN}${BOLD}╚══════════════════════════════════════════════════════════╝${NC}"
   echo -e "  🆔 CT-ID     : ${CTID}"
   echo -e "  🌐 URL       : ${BLUE}http://${ip}:${APP_PORT}${NC}"
-  if [ -n "${ADMIN_PASS:-}" ]; then
-    echo -e "  🔑 Login     : Benutzer ${ADMIN_USER} / Passwort ${ADMIN_PASS}"
+  if [ "${GENERATED_PASS:-0}" -eq 1 ]; then
+    echo -e "  🔑 Login     : Benutzer ${ADMIN_USER} / Passwort ${ADMIN_PASS}  (generiert)"
   else
-    echo -e "  🔑 Login     : Benutzer ${ADMIN_USER} (Passwort beim Setup gesetzt)"
+    echo -e "  🔑 Login     : Benutzer ${ADMIN_USER} / Passwort ${ADMIN_PASS}"
   fi
+  [ "$MODE" = "update" ] && echo -e "     ℹ️  Passwort gilt nur, falls NexoPOS noch nicht installiert war."
   echo -e "  📜 Logs      : pct exec ${CTID} -- journalctl -u ${APP_NAME}-queue -n 50 --no-pager"
   echo -e "  ♻️  Update    : bash -c \"\$(wget -qLO - https://raw.githubusercontent.com/HatchetMan111/NexoPOS-KassenServer/main/install/nexopos.sh)\" -- --update"
   echo -e "  🗑️  Deinstall: ... -- --uninstall"

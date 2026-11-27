@@ -13,6 +13,8 @@ bash -c "$(wget -qLO - https://raw.githubusercontent.com/HatchetMan111/NexoPOS-K
 |---|---|
 | Basis | Debian 12/13 LXC, unprivileged, `nesting=1`, `onboot=1` |
 | PHP | FPM aus der Distro (Debian 12 → 8.2, 13 → 8.4); Laravel 12 braucht ≥ 8.2, Socket wird dynamisch ermittelt |
+| Node.js | apt-first (Debian-Repo); Binary-Fallback nur wenn apt-Node fehlt/unbrauchbar |
+| Composer | apt-first (`/usr/bin`), Fallback: offizieller Installer → composer-stable.phar |
 | Datenbank | MariaDB, eigene DB + Benutzer, Passwort zufällig |
 | Webserver | Nginx auf Port **8080**, `fastcgi_pass` auf den ermittelten FPM-Socket |
 | Frontend | Vue/Vite-Build im CT (Node 24, nur einmalig beim Install/Update) |
@@ -69,7 +71,7 @@ lizenziert und sind nicht im Repo. Der Installer ändert daran nichts.
 ## Tests
 
 ```bash
-bash harness/run.sh     # 70 Assertions, Mock-Proxmox (unshare -rm)
+bash harness/run.sh     # 76 Assertions, Mock-Proxmox (unshare -rm)
 ```
 
 Der Harness mockt `pct/pveam/pvesh`, apt, systemd, MariaDB, PHP, Composer,
@@ -89,6 +91,10 @@ bash -n install/nexopos.sh && shellcheck -S warning install/nexopos.sh harness/r
 - Der Setup-Wizard im Browser hat nur eine GET-Route; der verlässliche Weg ist
   `php artisan ns:setup` (macht der Installer).
 - `ns:setup` setzt den Ladenname nicht selbst → wird per `tinker` nachgezogen.
+- `ns:setup` wird interaktiv (und bricht im `pct exec` still ab), wenn ein Pflichtwert
+  fehlt → der Installer generiert daher immer ein Admin-Passwort.
+- Nach dem Setup wird `nexopos_options` geprüft; fehlt die Tabelle, bricht der
+  Installer ab statt eine unfertige Instanz als „erfolgreich" zu melden.
 - Marketplace-Module müssen zur Core-Version passen (hier 6.3.x).
 
 ## Herkunft / Lizenz

@@ -272,7 +272,7 @@ case "$cmd" in
             # /opt/node24 (Binary-Entpacken) → Mock-Root; /tmp → Mock-Root (Grube: /tmp zuerst)
             inner_cmd="${inner_cmd//\/opt\/node24/$MK/opt/node24}"
             echo "pct exec $id bash -c (inner)" >> "$HS/calls.log"
-            exec env -i PATH="$INNERBIN" \
+            exec env -i PATH="$INNERBIN:$MK/usr/local/bin:/usr/bin:/bin" \
                 HARNESS_STATE="$HS" MKROOT="$MK" \
                 HOME=/root TERM=dumb LANG=C.UTF-8 \
                 ${envs[@]+"${envs[@]}"} \
@@ -299,7 +299,7 @@ case "$cmd" in
         for a in "${args[@]}"; do newargs+=("$(rewrite_path "$a")"); done
         newenvs=()
         for a in ${envs[@]+"${envs[@]}"}; do newenvs+=("$(rewrite_path "$a")"); done
-        exec env -i PATH="$INNERBIN" \
+        exec env -i PATH="$INNERBIN:$MK/usr/local/bin:/usr/bin:/bin" \
             HARNESS_STATE="$HS" MKROOT="$MK" \
             HOME=/root TERM=dumb LANG=C.UTF-8 \
             ${newenvs[@]+"${newenvs[@]}"} \
@@ -428,10 +428,15 @@ if [[ "${1:-}" == "install" ]]; then
                 [[ -e "$INNERBIN_DIR/npm" ]] || ln -sf "$MK/mock-npm" "$INNERBIN_DIR/npm" ;;
             git)
                 [[ -e "$INNERBIN_DIR/git" ]] || ln -sf "$MK/mock-git" "$INNERBIN_DIR/git" ;;
+            composer)
+                [[ -e "$INNERBIN_DIR/composer" ]] || ln -sf "$MK/mock-composer" "$INNERBIN_DIR/composer" ;;
+            nodejs|npm)
+                [[ -e "$INNERBIN_DIR/node" ]] || ln -sf "$MK/mock-node" "$INNERBIN_DIR/node"
+                [[ -e "$INNERBIN_DIR/npm" ]] || ln -sf "$MK/mock-npm" "$INNERBIN_DIR/npm" ;;
             php*)
                 # Debian-Pakete php-fpm/php-cli bringen /usr/bin/php; composer/node/
                 # curl/git sind nach dem Basis-apt da (realistischer apt-Zustand)
-                for t in php composer node npm npx curl git id chown useradd; do
+                for t in php curl git id chown useradd; do
                     [[ -e "$INNERBIN_DIR/$t" ]] || ln -sf "$MK/mock-$t" "$INNERBIN_DIR/$t"
                 done
                 mkdir -p "$MK/usr/local/bin"
@@ -502,6 +507,9 @@ HS="${HARNESS_STATE:?}"
 echo "mariadb $*" >> "$HS/calls.log"
 for a in "$@"; do
     case "$a" in
+        *nexopos_options*)
+            [[ -f "$HS/db_init_fail" ]] && exit 0   # leer = nicht initialisiert
+            echo "1"; exit 0 ;;
         "SELECT 1"*) echo "0"; exit 0 ;;
     esac
 done
@@ -739,6 +747,11 @@ assert_file "$MK/etc/nginx/sites-available/nexopos"
 assert_fcontains "$MK/etc/nginx/sites-available/nexopos" "fastcgi_pass unix:"
 assert_fregex "$MK/etc/nginx/sites-available/nexopos" "fastcgi_pass unix:/.*php.*-fpm\\.sock"
 
+t "Install: node/composer kommen per apt-first (kein /usr/local-Fallstrick)"
+assert_calls 1 "apt-get install -y -qq --no-install-recommends composer"
+assert_calls 1 "apt-get install -y -qq --no-install-recommends nodejs npm"
+assert_no_calls "nodejs.org/dist"
+
 t "Install: pct create bekommt onboot/nesting/unprivileged"
 assert_fregex "$HS/ct_150.create" "ARGS=.*--onboot 1"
 assert_fregex "$HS/ct_150.create" "ARGS=.*--features nesting=1"
@@ -800,6 +813,14 @@ ec=$(run_installer --update)
 assert_exit 0 "$ec"
 assert_out "Update auf CT 150"
 assert_out "http://10.120.5.88:8080"
+assert_out "Datenbank initialisiert"
+
+t "Install: ns:setup ohne DB-Init → harter Abbruch (kein stiller No-Op)"
+reset_state
+echo "FAIL_DB_INIT" > "$HS/db_init_fail"
+ec=$(run_installer --yes --admin-pass TestPass123)
+assert_exit 1 "$ec"
+assert_out "nexopos_options"
 
 t "Update: --id erzwingt CT-ID"
 seed_ct
