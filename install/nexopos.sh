@@ -365,6 +365,17 @@ fi
 log "PHP-FPM: ${FPM_SVC}  Socket: ${PHP_SOCK}"
 
 log "=== MariaDB ==="
+# Live-Grube 5: ein bei JEDEM Lauf neu generiertes DB_PASS wird per ALTER USER
+# gesetzt, muss aber auch in der .env landen – schlägt das Schreiben fehl, ist der
+# Zugriff sofort tot ("Access denied for user ''"). Daher: bestehendes Passwort
+# aus der .env übernehmen, damit Updates idempotent sind.
+if [ -f "$APP_DIR/.env" ]; then
+  _existing_pass="$(sed -n 's/^DB_PASSWORD=//p' "$APP_DIR/.env" | head -1 | sed 's/^["'"'"']//; s/["'"'"']$//')"
+  if [ -n "${_existing_pass:-}" ]; then
+    DB_PASS="$_existing_pass"
+    log "DB-Passwort aus bestehender .env übernommen (stabil bei Updates)."
+  fi
+fi
 systemctl enable mariadb >/dev/null 2>&1 || true
 systemctl start mariadb || true
 # DB + Rolle anlegen (idempotent). Läuft als root im CT → kein sudo nötig.
@@ -448,31 +459,49 @@ log "=== .env schreiben ==="
 if [ ! -f "$APP_DIR/.env" ]; then
   cp "$APP_DIR/.env.example" "$APP_DIR/.env"
 fi
-# Kernwerte setzen (idempotent, KEY bleibt bei Updates erhalten)
+# Kernwerte setzen (idempotent, KEY bleibt bei Updates erhalten).
+# Wichtig: die Werte werden als echte Env-Variablen übergeben – getenv() sieht
+# Shell-Variablen sonst NICHT (Live-Grube: DB_USERNAME/DB_PASSWORD blieben leer).
+NX_DB_NAME="$DB_NAME" NX_DB_USER="$DB_USER" NX_DB_PASS="$DB_PASS" \
+NX_APP_URL="http://$(hostname -I 2>/dev/null | awk '{print $1}'):${PORT}" \
 php -r '
 $env = file_get_contents(".env");
 $vals = [
   "APP_ENV" => "production",
   "APP_DEBUG" => "false",
-  "APP_URL" => getenv("APP_URL") ?: "http://127.0.0.1",
-  "APP_KEY" => getenv("APP_KEY") ?: "",
+  "APP_URL" => getenv("NX_APP_URL") ?: "http://127.0.0.1",
   "DB_CONNECTION" => "mysql",
   "DB_HOST" => "127.0.0.1",
   "DB_PORT" => "3306",
-  "DB_DATABASE" => getenv("DB_NAME"),
-  "DB_USERNAME" => getenv("DB_USER"),
-  "DB_PASSWORD" => getenv("DB_PASS"),
+  "DB_DATABASE" => getenv("NX_DB_NAME"),
+  "DB_USERNAME" => getenv("NX_DB_USER"),
+  "DB_PASSWORD" => getenv("NX_DB_PASS"),
   "QUEUE_CONNECTION" => "database",
   "CACHE_STORE" => "database",
   "SESSION_DRIVER" => "database",
   "BROADCAST_CONNECTION" => "log",
 ];
 foreach ($vals as $k => $v) {
-  if ($v === "") continue;
-  $env = preg_replace("/^" . preg_quote($k, "/") . "=.*$/m", $k . "=" . escapeshellarg($v), $env);
+  if ($v === "" || $v === false) continue;
+  $line = $k . "=" . $v;
+  if (preg_match("/^" . preg_quote($k, "/") . "=/m", $env)) {
+    $env = preg_replace("/^" . preg_quote($k, "/") . "=.*$/m", $line, $env);
+  } else {
+    $env .= PHP_EOL . $line;
+  }
 }
 file_put_contents(".env", $env);
 '
+# Harte Prüfung: ohne die drei DB-Werte ist jeder artisan-Aufruf ein Access-Denied.
+for _k in DB_DATABASE DB_USERNAME DB_PASSWORD; do
+  _v="$(sed -n "s/^${_k}=//p" "$APP_DIR/.env" | head -1)"
+  if [ -z "$_v" ]; then
+    err ".env unvollständig: ${_k} ist leer (DB-Zugriff würde scheitern)."
+    err "Zeilen: $(grep -cE '^DB_' "$APP_DIR/.env" 2>/dev/null || echo 0) DB_-Einträge, cwd=$(pwd)"
+    exit 1
+  fi
+done
+log ".env geschrieben (DB-Zugang gesetzt)."
 php artisan key:generate --force >/dev/null
 php artisan storage:link >/dev/null 2>&1 || true
 php artisan config:clear >/dev/null 2>&1 || true
@@ -492,20 +521,26 @@ fi
 log "Assets gebaut: $(ls public/build 2>/dev/null | wc -l) Einträge"
 
 log "=== NexoPOS Setup (CLI, headless) ==="
-# ns:setup ist idempotent (Helper::installed() prüft nexopos_options-Tabelle)
-if ! php artisan ns:setup \
+# ns:setup ist idempotent (Helper::installed() prüft nexopos_options-Tabelle).
+# Ausgabe in eine Logdatei statt /dev/null: bei Fehlschlag sieht man die Ursache.
+SETUP_CLI_LOG="/var/log/nexopos-setup-cli.log"
+if ! timeout 1800 php artisan ns:setup \
     --store_name="$STORE_NAME" \
     --admin_username="$ADMIN_USER" \
     --admin_email="$ADMIN_EMAIL" \
     --admin_password="$ADMIN_PASS" \
-    --language=de >/dev/null 2>&1; then
-  log "ns:setup erneut (manche Migrationen brauchen 2. Durchlauf) ..."
-  php artisan ns:setup \
-    --store_name="$STORE_NAME" \
-    --admin_username="$ADMIN_USER" \
-    --admin_email="$ADMIN_EMAIL" \
-    --admin_password="$ADMIN_PASS" \
-    --language=de
+    --language=de >>"$SETUP_CLI_LOG" 2>&1; then
+  warn_inner "ns:setup im ersten Versuch fehlgeschlagen – wiederhole (Migrationen)."
+  if ! timeout 1800 php artisan ns:setup \
+      --store_name="$STORE_NAME" \
+      --admin_username="$ADMIN_USER" \
+      --admin_email="$ADMIN_EMAIL" \
+      --admin_password="$ADMIN_PASS" \
+      --language=de >>"$SETUP_CLI_LOG" 2>&1; then
+    err "ns:setup fehlgeschlagen – letzte Zeilen:"
+    tail -n 25 "$SETUP_CLI_LOG" >&2 || true
+    exit 1
+  fi
 fi
 # Harte Verifikation: existiert die Options-Tabelle? Sonst war ns:setup ein
 # stiller No-Op (fehlende Pflichtwerte / interaktiver Abbruch) und die UI

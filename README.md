@@ -78,7 +78,7 @@ lizenziert und sind nicht im Repo. Der Installer ändert daran nichts.
 ## Tests
 
 ```bash
-bash harness/run.sh     # 79 Assertions, Mock-Proxmox (unshare -rm)
+bash harness/run.sh     # 83 Assertions, Mock-Proxmox (unshare -rm)
 ```
 
 Der Harness mockt `pct/pveam/pvesh`, apt, systemd, MariaDB, PHP, Composer,
@@ -98,6 +98,12 @@ Alle Netz-Schritte haben harte Zeitlimits und schreiben in `/var/log/nexopos-apt
 (30 min), `npm install`/`npm run build` (30/15 min), Downloads mit `--max-time`.
 Vor jedem Schritt steht eine Fortschrittszeile („apt: installiere …"), damit ein
 hängender Lauf sofort als solcher erkennbar ist.
+
+Die `.env` bekommt ihre DB-Werte als explizite Env-Variablen übergeben (nicht per
+`getenv` auf Shell-Variablen) und wird anschließend geprüft: leere `DB_DATABASE`/
+`DB_USERNAME`/`DB_PASSWORD` brechen ab, statt später als `Access denied for user ''`
+aufzuschlagen. Ein bestehendes DB-Passwort wird aus der `.env` übernommen, damit
+`--update` idempotent bleibt.
 
 Composer läuft als root nur mit `COMPOSER_ALLOW_SUPERUSER=1 --no-interaction`:
 ohne diese Flags fragt Composer „Continue as root/super user?" — die Frage geht

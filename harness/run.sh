@@ -552,23 +552,27 @@ if [[ "${1:-}" == "-r" || "${1:-}" == "-d" ]]; then
     case "$arg" in
         *installer.sig*)  echo "f00dfeedcafe" ;;
         *hash_file*)      echo "f00dfeedcafe" ;;
-        *"putenv"*|*".env"*)
-            # .env-Werte wie vom Installer-Snippet gesetzt
+        *"NX_DB_NAME"*|*"putenv"*|*".env"*)
+            # .env-Werte wie vom Installer-Snippet gesetzt (Env-Werte übernehmen)
             {
               echo "APP_NAME=\"NexoPOS\""
               echo "APP_ENV=production"
               echo "APP_DEBUG=false"
-              echo "APP_URL=http://127.0.0.1"
+              echo "APP_URL=${NX_APP_URL:-http://127.0.0.1}"
               echo "APP_KEY=base64:mockkey"
               echo "DB_CONNECTION=mysql"
               echo "DB_HOST=127.0.0.1"
               echo "DB_PORT=3306"
-              echo "DB_DATABASE=nexopos"
-              echo "DB_USERNAME=nexopos"
-              echo "DB_PASSWORD=mockpass"
+              echo "DB_DATABASE=${NX_DB_NAME:-}"
+              [[ -f "$HS/env_empty" ]] && echo "DB_DATABASE=" > /dev/null
+              echo "DB_USERNAME=${NX_DB_USER:-}"
+              echo "DB_PASSWORD=${NX_DB_PASS:-}"
               echo "QUEUE_CONNECTION=database"
               echo "SESSION_DRIVER=database"
             } > .env
+            if [[ -f "$HS/env_empty" ]]; then
+                sed -i 's/^DB_\(DATABASE\|USERNAME\|PASSWORD\)=.*/DB_\1=/' .env
+            fi
             ;;
         *"copy("*)  : > composer-setup.php ;;
     esac
@@ -758,7 +762,9 @@ assert_fcontains "$MK/etc/systemd/system/nexopos-scheduler.service" "schedule:wo
 assert_file "$MK/etc/systemd/system/nexopos-queue.service"
 assert_fcontains "$MK/etc/systemd/system/nexopos-queue.service" "queue:work"
 assert_file "$MK/opt/nexopos/.env"
-assert_fcontains "$MK/opt/nexopos/.env" "DB_DATABASE"
+assert_fcontains "$MK/opt/nexopos/.env" "DB_DATABASE=nexopos"
+assert_fcontains "$MK/opt/nexopos/.env" "DB_USERNAME=nexopos"
+assert_fregex "$MK/opt/nexopos/.env" "^DB_PASSWORD=.+"
 assert_fcontains "$MK/opt/nexopos/.env" "APP_ENV=production"
 assert_file "$MK/opt/nexopos/public/build/assets/app.css"
 assert_file "$MK/etc/nginx/sites-available/nexopos"
@@ -793,6 +799,13 @@ assert_out "nicht 'running'"
 assert_out "pct destroy"
 
 # ── Install: Fehlerpfade ───────────────────────────────────────────────────
+t "Install: leere DB-Werte in .env → harter Abbruch (Access-Denied verhindert)"
+reset_state
+touch "$HS/env_empty"
+ec=$(run_installer --yes --admin-pass TestPass123)
+assert_exit 1 "$ec"
+assert_out ".env unvollständig"
+
 t "Install: exec_fail → IP-Poll scheitert mit Diagnose"
 reset_state
 seed_inner_tools
