@@ -58,13 +58,15 @@ Der `--`-Trenner vor den Optionen ist optional (beide Formen gehen):
 | `--admin-user X` | `admin` | Admin-Benutzername |
 | `--admin-email X` | `admin@nexopos.local` | Admin-E-Mail |
 | `--admin-pass X` | zufällig | Admin-Passwort |
+| `--reset-pass` | – | setzt das Admin-Passwort auch bei **bestehender** Installation |
 | `--store-name X` | `NexoPOS` | Ladenname |
 | `--bridge`, `--storage` | `vmbr0`, `local-lvm` | Netz/Storage |
 | `--yes` | – | ohne Rückfrage |
 
 ## Nach der Installation
 
-1. `http://<CT-IP>:8080` öffnen → Login mit dem Admin-Benutzer.
+1. `http://<CT-IP>:8080/dashboard` öffnen → Login mit dem Admin-Benutzer.
+   Die Startseite `/` ist nur die Willkommensseite („NexoPOS is correctly installed").
 2. Cron/Queue laufen als systemd-Dienste, nichts weiter zu tun.
 3. Reboot-Test: `pct reboot <ID>` – App und Dienste kommen automatisch zurück.
 
@@ -78,7 +80,7 @@ lizenziert und sind nicht im Repo. Der Installer ändert daran nichts.
 ## Tests
 
 ```bash
-bash harness/run.sh     # 87 Assertions, Mock-Proxmox (unshare -rm)
+bash harness/run.sh     # 92 Assertions, Mock-Proxmox (unshare -rm)
 ```
 
 Der Harness mockt `pct/pveam/pvesh`, apt, systemd, MariaDB, PHP, Composer,
@@ -121,6 +123,11 @@ hängend. Eine unbrauchbare Vorinstallation wird erkannt und ersetzt.
   LAMP-Stack im CT statt Container-in-Container.
 - Der Setup-Wizard im Browser hat nur eine GET-Route; der verlässliche Weg ist
   `php artisan ns:setup` (macht der Installer).
+- `ns:setup` legt den Admin **nur beim ersten Lauf** an — bei bestehender
+  Installation ändert es das Passwort nicht. Dafür gibt es `--reset-pass`
+  (setzt das Passwort auf `--admin-pass` bzw. ein generiertes).
+- Nach jedem Lauf liegt das verwendete Passwort im CT unter
+  `/root/nexopos-admin-pass.txt` (0600).
 - `ns:setup` setzt den Ladenname nicht selbst → wird per `tinker` nachgezogen.
 - `ns:setup` wird interaktiv (und bricht im `pct exec` still ab), wenn ein Pflichtwert
   fehlt → der Installer generiert daher immer ein Admin-Passwort.

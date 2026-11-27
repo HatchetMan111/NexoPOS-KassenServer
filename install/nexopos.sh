@@ -27,6 +27,8 @@
 #   --admin-user X Admin-Benutzername (Standard: admin)
 #   --admin-email X Admin-E-Mail (Standard: admin@nexopos.local)
 #   --admin-pass X Admin-Passwort (Standard: generiert, wird ausgegeben)
+#   --reset-pass   Setzt das Admin-Passwort auch bei bestehender Installation
+#                  (sonst legt ns:setup den Benutzer nur beim ersten Mal an)
 #   --store-name X Name des Ladens (Standard: NexoPOS)
 #   --yes          Keine Rückfrage (für Automatisierung)
 #
@@ -55,6 +57,7 @@ CT_TEMPLATE=""
 CT_UNPRIVILEGED=1
 CT_ONBOOT=1
 ASSUME_YES=0
+RESET_PASS=0
 MODE="install"
 # Roh-URL des Installers (für Reinstall-Hinweise in der Fehlerkette)
 ONE_LINER="https://raw.githubusercontent.com/HatchetMan111/NexoPOS-KassenServer/main/install/nexopos.sh"
@@ -119,6 +122,7 @@ while [[ $# -gt 0 ]]; do
     --admin-email) ADMIN_EMAIL="$2"; shift 2 ;;
     --admin-pass)  ADMIN_PASS="$2"; shift 2 ;;
     --store-name)  STORE_NAME="$2"; shift 2 ;;
+    --reset-pass) RESET_PASS=1; shift ;;   # Admin-Passwort auf --admin-pass setzen
     --yes|-y)     ASSUME_YES=1; shift ;;
     --)           shift ;;   # Standard-Trenner: "bash -c ... -- --update" belegt $0 mit "--"
     -h|--help)    sed -n '2,42p' "$0"; exit 0 ;;
@@ -283,6 +287,7 @@ ADMIN_USER="${ADMIN_USER:-admin}"
 ADMIN_EMAIL="${ADMIN_EMAIL:-admin@nexopos.local}"
 ADMIN_PASS="${ADMIN_PASS:-}"
 STORE_NAME="${STORE_NAME:-NexoPOS}"
+RESET_PASS="${RESET_PASS:-0}"
 
 log "=== Basis-Pakete ==="
 export DEBIAN_FRONTEND=noninteractive
@@ -561,6 +566,28 @@ if ! mariadb -N -B -e "SHOW TABLES FROM ${DB_NAME} LIKE 'nexopos_options'" 2>/de
 fi
 log "Datenbank initialisiert (nexopos_options vorhanden)."
 
+# ns:setup legt den Admin NUR beim ersten Lauf an. Bricht ein Lauf danach ab, ist
+# das generierte Passwort verloren – daher zusätzlich im CT ablegen (root, 0600).
+printf '%s\n' "$ADMIN_PASS" > /root/nexopos-admin-pass.txt 2>/dev/null || true
+chmod 600 /root/nexopos-admin-pass.txt 2>/dev/null || true
+
+# --reset-pass: Passwort auch bei bestehender Installation setzen.
+if [ "$RESET_PASS" = "1" ]; then
+  log "Setze Admin-Passwort fuer '${ADMIN_USER}' zurueck ..."
+  _out="$(timeout 300 php artisan tinker --execute="\$u = App\\Models\\User::where('username', '${ADMIN_USER}')->first(); if (! \$u) { echo 'NO_USER'; exit(3); } \$u->password = Illuminate\\Support\\Facades\\Hash::make('${ADMIN_PASS}'); \$u->save(); echo 'PASS_SET';" 2>&1 || true)"
+  if printf '%s' "$_out" | grep -q PASS_SET; then
+    log "Admin-Passwort gesetzt."
+  elif printf '%s' "$_out" | grep -q NO_USER; then
+    err "Admin-Benutzer '${ADMIN_USER}' existiert nicht – nutze --admin-user."
+    err "Ausgabe: $(printf '%s' "$_out" | tail -3)"
+    exit 1
+  else
+    err "Passwort-Reset fehlgeschlagen. Ausgabe:"
+    printf '%s\n' "$_out" | tail -8 >&2
+    exit 1
+  fi
+fi
+
 # Store-Namen setzt ns:setup NICHT (Bekannt: Option nur Default) → nachziehen
 php artisan tinker --execute="ns()->option->set('ns_store_name', '${STORE_NAME}');" >/dev/null 2>&1 || true
 php artisan config:clear >/dev/null 2>&1 || true
@@ -705,7 +732,7 @@ do_install() {
   # wäre toter Code) → if ! … dann klare Meldung + Log-Auszug.
   if ! pct exec "$CTID" -- env PORT="$APP_PORT" APP_NAME="$APP_NAME" APP_REPO="$APP_REPO" \
     APP_BRANCH="master" ADMIN_USER="$ADMIN_USER" ADMIN_EMAIL="$ADMIN_EMAIL" \
-    ADMIN_PASS="$ADMIN_PASS" STORE_NAME="$STORE_NAME" \
+    ADMIN_PASS="$ADMIN_PASS" STORE_NAME="$STORE_NAME" RESET_PASS="$RESET_PASS" \
     bash -c 'set -o pipefail; bash /root/nx-inner.sh 2>&1 | tee /var/log/nexopos-setup.log'; then
     SETUP_LOG=/tmp/${APP_NAME}-ct-setup.log
     pct exec "$CTID" -- cat /var/log/nexopos-setup.log > "$SETUP_LOG" 2>/dev/null || true
@@ -739,7 +766,7 @@ do_update() {
   pct push "$CTID" /tmp/nx-inner.sh /root/nx-inner.sh >/dev/null
   if ! pct exec "$CTID" -- env PORT="$APP_PORT" APP_NAME="$APP_NAME" APP_REPO="$APP_REPO" \
     APP_BRANCH="master" ADMIN_USER="$ADMIN_USER" ADMIN_EMAIL="$ADMIN_EMAIL" \
-    ADMIN_PASS="${ADMIN_PASS:-}" STORE_NAME="$STORE_NAME" \
+    ADMIN_PASS="${ADMIN_PASS:-}" STORE_NAME="$STORE_NAME" RESET_PASS="$RESET_PASS" \
     bash -c 'set -o pipefail; bash /root/nx-inner.sh 2>&1 | tee /var/log/nexopos-setup.log'; then
     SETUP_LOG=/tmp/${APP_NAME}-ct-setup.log
     pct exec "$CTID" -- cat /var/log/nexopos-setup.log > "$SETUP_LOG" 2>/dev/null || true
@@ -799,12 +826,18 @@ summary() {
   echo -e "${GREEN}${BOLD}╚══════════════════════════════════════════════════════════╝${NC}"
   echo -e "  🆔 CT-ID     : ${CTID}"
   echo -e "  🌐 URL       : ${BLUE}http://${ip}:${APP_PORT}${NC}"
-  if [ "${GENERATED_PASS:-0}" -eq 1 ]; then
-    echo -e "  🔑 Login     : Benutzer ${ADMIN_USER} / Passwort ${ADMIN_PASS}  (generiert)"
+  if [ "$MODE" = "install" ] || [ "${RESET_PASS:-0}" -eq 1 ]; then
+    if [ "${GENERATED_PASS:-0}" -eq 1 ]; then
+      echo -e "  🔑 Login     : Benutzer ${ADMIN_USER} / Passwort ${ADMIN_PASS}  (generiert)"
+    else
+      echo -e "  🔑 Login     : Benutzer ${ADMIN_USER} / Passwort ${ADMIN_PASS}"
+    fi
+    echo -e "     🌐 Dashboard : ${BLUE}http://${ip}:${APP_PORT}/dashboard${NC}"
   else
-    echo -e "  🔑 Login     : Benutzer ${ADMIN_USER} / Passwort ${ADMIN_PASS}"
+    echo -e "  🔑 Login     : Benutzer ${ADMIN_USER} (Passwort unverändert)"
+    echo -e "     ↳ Passwort setzen: ... -- --update --reset-pass"
   fi
-  [ "$MODE" = "update" ] && echo -e "     ℹ️  Passwort gilt nur, falls NexoPOS noch nicht installiert war."
+  echo -e "     📄 Passwort-Datei im CT: /root/nexopos-admin-pass.txt"
   echo -e "  📜 Logs      : pct exec ${CTID} -- journalctl -u ${APP_NAME}-queue -n 50 --no-pager"
   echo -e "  ♻️  Update    : bash -c \"\$(wget -qLO - https://raw.githubusercontent.com/HatchetMan111/NexoPOS-KassenServer/main/install/nexopos.sh)\" -- --update"
   echo -e "  🗑️  Deinstall: ... -- --uninstall"

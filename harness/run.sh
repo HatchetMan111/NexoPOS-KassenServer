@@ -243,6 +243,7 @@ case "$cmd" in
         /bin/sed -e "s|/tmp/|$MK/tmp/|g" -e "s|/etc/|$MK/etc/|g" \
             -e "s|/usr/share|$MK/usr/share|g" -e "s|/usr/local|$MK/usr/local|g" \
             -e "s|/opt/nexopos|$MK/opt/nexopos|g" -e "s|/opt/node24|$MK/opt/node24|g" \
+            -e "s|/root/|$MK/root/|g" \
             -e "s|/var/log|$MK/var/log|g" -e "s|/run/php|$MK/run/php|g" \
             "$src" > "$MK$dst"
         chmod 755 "$MK$dst" 2>/dev/null || true
@@ -544,7 +545,13 @@ arg="${*: -1}"
 if [[ "${1:-}" == "artisan" ]]; then
     case "${2:-}" in
         ns:setup)    touch "$HS/ns_installed"; echo "NexoPOS setup done" ;;
-        key:generate|storage:link|config:clear|tinker) : ;;
+        key:generate|storage:link|config:clear) : ;;
+        tinker)
+            # Passwort-Reset (--reset-pass): User existiert, Passwort setzen
+            case "${*: -1}" in
+                *Hash::make*) echo "PASS_SET" ;;
+                *) : ;;
+            esac ;;
     esac
     exit 0
 fi
@@ -768,6 +775,8 @@ assert_fcontains "$MK/opt/nexopos/.env" "DB_DATABASE=nexopos"
 assert_fcontains "$MK/opt/nexopos/.env" "DB_USERNAME=nexopos"
 assert_fregex "$MK/opt/nexopos/.env" "^DB_PASSWORD=.+"
 assert_fcontains "$MK/opt/nexopos/.env" "APP_ENV=production"
+assert_file "$MK/root/nexopos-admin-pass.txt"
+assert_fcontains "$MK/root/nexopos-admin-pass.txt" "TestPass123"
 assert_fcontains "$MK/opt/nexopos/.env" "SESSION_DRIVER=file"
 assert_fcontains "$MK/opt/nexopos/.env" "QUEUE_CONNECTION=sync"
 assert_file "$MK/opt/nexopos/public/build/manifest.json"
@@ -876,6 +885,13 @@ seed_ct
 ec=$(run_installer_bash_c --update)
 assert_exit 0 "$ec"
 assert_out "Update auf CT 150"
+
+t "Update: --reset-pass setzt das Admin-Passwort (bestehende Installation)"
+seed_ct
+ec=$(run_installer --update --admin-pass NeuPass456 --reset-pass)
+assert_exit 0 "$ec"
+assert_out "Admin-Passwort gesetzt"
+assert_out "Benutzer admin / Passwort NeuPass456"
 
 t "Update: --id erzwingt CT-ID"
 seed_ct
