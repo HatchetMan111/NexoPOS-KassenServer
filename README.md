@@ -57,15 +57,17 @@ Der `--`-Trenner vor den Optionen ist optional (beide Formen gehen):
 | `--port N` | 8080 | Web-Port im CT |
 | `--admin-user X` | `admin` | Admin-Benutzername |
 | `--admin-email X` | `admin@nexopos.local` | Admin-E-Mail |
-| `--admin-pass X` | zufällig | Admin-Passwort |
-| `--reset-pass` | – | setzt das Admin-Passwort auch bei **bestehender** Installation |
+| `--admin-pass X` | zufällig | Admin-Passwort; wird auch bei bestehender Installation gesetzt |
+| `--reset-pass` | – | setzt das Admin-Passwort (nur nötig, wenn `--admin-pass` fehlt) |
 | `--store-name X` | `NexoPOS` | Ladenname |
 | `--bridge`, `--storage` | `vmbr0`, `local-lvm` | Netz/Storage |
 | `--yes` | – | ohne Rückfrage |
 
 ## Nach der Installation
 
-1. `http://<CT-IP>:8080/dashboard` öffnen → Login mit dem Admin-Benutzer.
+1. `http://<CT-IP>:8080/dashboard` öffnen → Login mit Benutzer + Passwort aus der
+   Summary. Beides steht am Ende **immer** da: neu gesetzt (`--admin-pass` bzw.
+   generiert) oder aus der Passwort-Datei im CT gelesen.
    Die Startseite `/` ist nur die Willkommensseite („NexoPOS is correctly installed").
 2. Cron/Queue laufen als systemd-Dienste, nichts weiter zu tun.
 3. Reboot-Test: `pct reboot <ID>` – App und Dienste kommen automatisch zurück.
@@ -80,7 +82,7 @@ lizenziert und sind nicht im Repo. Der Installer ändert daran nichts.
 ## Tests
 
 ```bash
-bash harness/run.sh     # 92 Assertions, Mock-Proxmox (unshare -rm)
+bash harness/run.sh     # 98 Assertions, Mock-Proxmox (unshare -rm)
 ```
 
 Der Harness mockt `pct/pveam/pvesh`, apt, systemd, MariaDB, PHP, Composer,

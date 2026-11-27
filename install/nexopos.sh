@@ -120,7 +120,7 @@ while [[ $# -gt 0 ]]; do
     --storage)    CT_STORAGE="$2"; shift 2 ;;
     --admin-user)  ADMIN_USER="$2"; shift 2 ;;
     --admin-email) ADMIN_EMAIL="$2"; shift 2 ;;
-    --admin-pass)  ADMIN_PASS="$2"; shift 2 ;;
+    --admin-pass)  ADMIN_PASS="$2"; RESET_PASS=1; shift 2 ;;   # explizit ⇒ setzen
     --store-name)  STORE_NAME="$2"; shift 2 ;;
     --reset-pass) RESET_PASS=1; shift ;;   # Admin-Passwort auf --admin-pass setzen
     --yes|-y)     ASSUME_YES=1; shift ;;
@@ -141,10 +141,8 @@ command -v wget >/dev/null 2>&1 || { apt-get update -qq && apt-get install -y -q
 # TTY endet das still als "installation aborted". Daher immer ein Passwort setzen.
 if [ -z "${ADMIN_PASS:-}" ]; then
   ADMIN_PASS="$(openssl rand -base64 24 | tr -dc 'A-Za-z0-9' | head -c 16)"
-  GENERATED_PASS=1
-else
-  GENERATED_PASS=0
 fi
+PASS_SOURCE="neu gesetzt"
 
 SETUP_LOG="/tmp/${APP_NAME}-setup.log"
 
@@ -566,10 +564,24 @@ if ! mariadb -N -B -e "SHOW TABLES FROM ${DB_NAME} LIKE 'nexopos_options'" 2>/de
 fi
 log "Datenbank initialisiert (nexopos_options vorhanden)."
 
-# ns:setup legt den Admin NUR beim ersten Lauf an. Bricht ein Lauf danach ab, ist
-# das generierte Passwort verloren – daher zusätzlich im CT ablegen (root, 0600).
+# ns:setup legt den Admin NUR beim ersten Lauf an. Damit in der Summary IMMER ein
+# gültiges Passwort steht, gilt: gespeichertes Passwort aus dem CT gewinnt (außer
+# es wurde explizit eines vorgegeben bzw. --reset-pass gesetzt). Fehlt die Datei,
+# wird das generierte Passwort aktiv gesetzt – sonst wäre es unbekannt.
+PASS_SOURCE="neu gesetzt"
+if [ "$RESET_PASS" != "1" ]; then
+  if [ -s /root/nexopos-admin-pass.txt ]; then
+    ADMIN_PASS="$(head -1 /root/nexopos-admin-pass.txt)"
+    PASS_SOURCE="gespeichert"
+    log "Gespeichertes Admin-Passwort übernommen (Anzeige = Login)."
+  else
+    log "Kein gespeichertes Passwort – setze das generierte, damit der Login sicher passt."
+    RESET_PASS=1
+  fi
+fi
 printf '%s\n' "$ADMIN_PASS" > /root/nexopos-admin-pass.txt 2>/dev/null || true
 chmod 600 /root/nexopos-admin-pass.txt 2>/dev/null || true
+printf '%s\n' "$PASS_SOURCE" > /root/nexopos-admin-pass.source 2>/dev/null || true
 
 # --reset-pass: Passwort auch bei bestehender Installation setzen.
 if [ "$RESET_PASS" = "1" ]; then
@@ -693,6 +705,17 @@ log "=== Setup abgeschlossen (Port ${PORT}) ==="
 INNEREOF
 }
 
+# Liest das im CT gespeicherte Admin-Passwort (Quelle der Wahrheit für die Summary)
+read_back_credentials() {
+  local p src
+  p="$(pct exec "$CTID" -- cat /root/nexopos-admin-pass.txt 2>/dev/null | head -1 || true)"
+  src="$(pct exec "$CTID" -- cat /root/nexopos-admin-pass.source 2>/dev/null | head -1 || true)"
+  if [ -n "${p:-}" ]; then
+    ADMIN_PASS="$p"
+    [ -n "${src:-}" ] && PASS_SOURCE="$src"
+  fi
+}
+
 # ---------- Modi -------------------------------------------------------------
 do_install() {
   header "NexoPOS – Neu-Installation"
@@ -740,6 +763,9 @@ do_install() {
     tail -n 30 "$SETUP_LOG" >&2 2>/dev/null || true
     die "In-Container Setup fehlgeschlagen."
   fi
+  # Passwort/Quelle aus dem CT übernehmen – die Summary zeigt damit IMMER den
+  # tatsächlich gültigen Login, egal ob neu gesetzt oder gespeichert.
+  read_back_credentials
   pct exec "$CTID" -- rm -f /root/nx-inner.sh >/dev/null 2>&1 || true
 
   header "Verifikation"
@@ -774,6 +800,7 @@ do_update() {
     tail -n 30 "$SETUP_LOG" >&2 2>/dev/null || true
     die "In-Container Setup (Update) fehlgeschlagen."
   fi
+  read_back_credentials
   pct exec "$CTID" -- rm -f /root/nx-inner.sh >/dev/null 2>&1 || true
   local svc; svc="$(pct exec "$CTID" -- systemctl is-active nginx 2>/dev/null || true)"
   [ "$svc" = "active" ] && ok "nginx active" || die "nginx nach Update nicht active."
@@ -826,18 +853,15 @@ summary() {
   echo -e "${GREEN}${BOLD}╚══════════════════════════════════════════════════════════╝${NC}"
   echo -e "  🆔 CT-ID     : ${CTID}"
   echo -e "  🌐 URL       : ${BLUE}http://${ip}:${APP_PORT}${NC}"
-  if [ "$MODE" = "install" ] || [ "${RESET_PASS:-0}" -eq 1 ]; then
-    if [ "${GENERATED_PASS:-0}" -eq 1 ]; then
-      echo -e "  🔑 Login     : Benutzer ${ADMIN_USER} / Passwort ${ADMIN_PASS}  (generiert)"
-    else
-      echo -e "  🔑 Login     : Benutzer ${ADMIN_USER} / Passwort ${ADMIN_PASS}"
-    fi
-    echo -e "     🌐 Dashboard : ${BLUE}http://${ip}:${APP_PORT}/dashboard${NC}"
+  echo -e "  🔑 Benutzer  : ${ADMIN_USER}"
+  if [ -n "${ADMIN_PASS:-}" ]; then
+    echo -e "  🔑 Passwort  : ${ADMIN_PASS}  (${PASS_SOURCE:-gespeichert})"
   else
-    echo -e "  🔑 Login     : Benutzer ${ADMIN_USER} (Passwort unverändert)"
-    echo -e "     ↳ Passwort setzen: ... -- --update --reset-pass"
+    echo -e "  🔑 Passwort  : (unbekannt – setze es mit --update --reset-pass)"
   fi
+  echo -e "  🌐 Dashboard : ${BLUE}http://${ip}:${APP_PORT}/dashboard${NC}"
   echo -e "     📄 Passwort-Datei im CT: /root/nexopos-admin-pass.txt"
+  echo -e "     ↳ aendern: ... -- --update --admin-pass NEUES_PASSWORT"
   echo -e "  📜 Logs      : pct exec ${CTID} -- journalctl -u ${APP_NAME}-queue -n 50 --no-pager"
   echo -e "  ♻️  Update    : bash -c \"\$(wget -qLO - https://raw.githubusercontent.com/HatchetMan111/NexoPOS-KassenServer/main/install/nexopos.sh)\" -- --update"
   echo -e "  🗑️  Deinstall: ... -- --uninstall"

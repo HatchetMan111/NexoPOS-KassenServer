@@ -762,7 +762,7 @@ assert_out "systemctl is-active nginx: active"
 assert_out "HTTP / = 200"
 assert_out "http://10.120.5.88:8080"
 assert_out "NexoPOS ist installiert"
-assert_out "Benutzer admin / Passwort TestPass123"
+assert_out "Passwort  : TestPass123"
 assert_out "composer: Composer version 2.8.4 (mock)"
 assert_calls 1 "pvesh get /cluster/nextid"
 assert_calls 1 "pct create 150"
@@ -891,7 +891,23 @@ seed_ct
 ec=$(run_installer --update --admin-pass NeuPass456 --reset-pass)
 assert_exit 0 "$ec"
 assert_out "Admin-Passwort gesetzt"
-assert_out "Benutzer admin / Passwort NeuPass456"
+assert_out "Passwort  : NeuPass456"
+
+t "Update ohne gespeichertes Passwort → Installer setzt selbst und zeigt es"
+seed_ct
+ec=$(run_installer --update)
+assert_exit 0 "$ec"
+assert_out "Passwort  :"
+assert_out "neu gesetzt"
+
+t "Update mit gespeicherter Passwort-Datei → Anzeige = gespeicherter Wert"
+seed_ct
+printf 'GespeichertPw1\n' > "$MK/root/nexopos-admin-pass.txt"
+printf 'gespeichert\n' > "$MK/root/nexopos-admin-pass.source"
+ec=$(run_installer --update)
+assert_exit 0 "$ec"
+assert_out "Passwort  : GespeichertPw1"
+assert_out "gespeichert"
 
 t "Update: --id erzwingt CT-ID"
 seed_ct
