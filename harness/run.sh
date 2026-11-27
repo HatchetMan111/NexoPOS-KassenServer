@@ -578,6 +578,9 @@ if [[ "${1:-}" == "-r" || "${1:-}" == "-d" ]]; then
               echo "QUEUE_CONNECTION=sync"
               echo "CACHE_STORE=file"
               echo "SESSION_DRIVER=file"
+              echo "SESSION_DOMAIN=${NX_SESSION_DOMAIN:-null}"
+              echo "SANCTUM_STATEFUL_DOMAINS=${NX_SANCTUM_DOMAINS:-}"
+              echo "SESSION_SECURE_COOKIE=false"
             } > .env
             if [[ -f "$HS/env_empty" ]]; then
                 sed -i 's/^DB_\(DATABASE\|USERNAME\|PASSWORD\)=.*/DB_\1=/' .env
@@ -779,6 +782,8 @@ assert_file "$MK/root/nexopos-admin-pass.txt"
 assert_fcontains "$MK/root/nexopos-admin-pass.txt" "TestPass123"
 assert_fcontains "$MK/opt/nexopos/.env" "SESSION_DRIVER=file"
 assert_fcontains "$MK/opt/nexopos/.env" "QUEUE_CONNECTION=sync"
+assert_fcontains "$MK/opt/nexopos/.env" "SESSION_DOMAIN=null"
+assert_fregex "$MK/opt/nexopos/.env" "SANCTUM_STATEFUL_DOMAINS=.*10\.120\.5\.88:8080"
 assert_file "$MK/opt/nexopos/public/build/manifest.json"
 assert_file "$MK/opt/nexopos/public/build/assets/app.css"
 assert_file "$MK/etc/nginx/sites-available/nexopos"

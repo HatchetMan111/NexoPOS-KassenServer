@@ -82,7 +82,7 @@ lizenziert und sind nicht im Repo. Der Installer ändert daran nichts.
 ## Tests
 
 ```bash
-bash harness/run.sh     # 98 Assertions, Mock-Proxmox (unshare -rm)
+bash harness/run.sh     # 100 Assertions, Mock-Proxmox (unshare -rm)
 ```
 
 Der Harness mockt `pct/pveam/pvesh`, apt, systemd, MariaDB, PHP, Composer,
@@ -102,6 +102,11 @@ Alle Netz-Schritte haben harte Zeitlimits und schreiben in `/var/log/nexopos-apt
 (30 min), `npm install`/`npm run build` (30/15 min), Downloads mit `--max-time`.
 Vor jedem Schritt steht eine Fortschrittszeile („apt: installiere …"), damit ein
 hängender Lauf sofort als solcher erkennbar ist.
+
+Session-Cookies funktionieren über die CT-IP: `SESSION_DOMAIN=null`,
+`SANCTUM_STATEFUL_DOMAINS=<CT-IP>:<Port>,…` und `SESSION_SECURE_COOKIE=false`.
+Das Upstream-Beispiel setzt alles auf `127.0.0.1` und erzeugt sonst
+„CSRF token mismatch" (419) beim Login.
 
 `.env` nutzt die Upstream-Treiber (`SESSION_DRIVER=file`, `CACHE_STORE=file`,
 `QUEUE_CONNECTION=sync`): `database` würde 500er produzieren, weil NexoPOS die

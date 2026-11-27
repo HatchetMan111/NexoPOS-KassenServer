@@ -465,8 +465,12 @@ fi
 # Kernwerte setzen (idempotent, KEY bleibt bei Updates erhalten).
 # Wichtig: die Werte werden als echte Env-Variablen übergeben – getenv() sieht
 # Shell-Variablen sonst NICHT (Live-Grube: DB_USERNAME/DB_PASSWORD blieben leer).
+CT_IP_ADDR="$(hostname -I 2>/dev/null | awk '{print $1}')"
+[ -n "$CT_IP_ADDR" ] || CT_IP_ADDR="127.0.0.1"
 NX_DB_NAME="$DB_NAME" NX_DB_USER="$DB_USER" NX_DB_PASS="$DB_PASS" \
-NX_APP_URL="http://$(hostname -I 2>/dev/null | awk '{print $1}'):${PORT}" \
+NX_APP_URL="http://${CT_IP_ADDR}:${PORT}" \
+NX_SESSION_DOMAIN="null" \
+NX_SANCTUM_DOMAINS="${CT_IP_ADDR}:${PORT},${CT_IP_ADDR},localhost" \
 php -r '
 $env = file_get_contents(".env");
 $vals = [
@@ -487,6 +491,12 @@ $vals = [
   "CACHE_STORE" => "file",
   "SESSION_DRIVER" => "file",
   "BROADCAST_CONNECTION" => "log",
+  // Live-Grube 8: "CSRF token mismatch" (419). Das Upstream-Beispiel setzt
+  // SESSION_DOMAIN=127.0.0.1 und SANCTUM_STATEFUL_DOMAINS nur auf 127.0.0.1 –
+  // beim Zugriff ueber die CT-IP wird dann kein Session-Cookie ausgeliefert.
+  "SESSION_DOMAIN" => getenv("NX_SESSION_DOMAIN") ?: "null",
+  "SANCTUM_STATEFUL_DOMAINS" => getenv("NX_SANCTUM_DOMAINS"),
+  "SESSION_SECURE_COOKIE" => "false",
 ];
 foreach ($vals as $k => $v) {
   if ($v === "" || $v === false) continue;
@@ -603,9 +613,18 @@ fi
 # Store-Namen setzt ns:setup NICHT (Bekannt: Option nur Default) → nachziehen
 php artisan tinker --execute="ns()->option->set('ns_store_name', '${STORE_NAME}');" >/dev/null 2>&1 || true
 php artisan config:clear >/dev/null 2>&1 || true
+php artisan view:clear >/dev/null 2>&1 || true
+php artisan route:clear >/dev/null 2>&1 || true
 
 log "=== Verzeichnisse + Rechte ==="
 id www-data >/dev/null 2>&1 || useradd -r -s /usr/sbin/nologin www-data
+# Sessions werden als Dateien geschrieben – fehlende Ordner = 419/500
+install -d -o www-data -g www-data -m 775 \
+  "$APP_DIR/storage/framework/sessions" \
+  "$APP_DIR/storage/framework/views" \
+  "$APP_DIR/storage/framework/cache/data" \
+  "$APP_DIR/storage/logs" \
+  "$APP_DIR/bootstrap/cache" 2>/dev/null || true
 chown -R www-data:www-data "$APP_DIR/storage" "$APP_DIR/bootstrap/cache" 2>/dev/null || true
 chmod -R ug+rwX "$APP_DIR/storage" "$APP_DIR/bootstrap/cache" 2>/dev/null || true
 
