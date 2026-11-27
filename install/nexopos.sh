@@ -476,9 +476,13 @@ $vals = [
   "DB_DATABASE" => getenv("NX_DB_NAME"),
   "DB_USERNAME" => getenv("NX_DB_USER"),
   "DB_PASSWORD" => getenv("NX_DB_PASS"),
-  "QUEUE_CONNECTION" => "database",
-  "CACHE_STORE" => "database",
-  "SESSION_DRIVER" => "database",
+  // Upstream-Defaults (.env.example): file-Cache/Sessions, sync-Queue.
+  // Treiber "database" erzeugt 500er ("Table sessions not found"), weil NexoPOS
+  // diese Framework-Tabellen nicht migriert. Achtung: Apostrophe sind hier
+  // verboten, sie beenden die Shell-Single-Quote-Kette von php -r.
+  "QUEUE_CONNECTION" => "sync",
+  "CACHE_STORE" => "file",
+  "SESSION_DRIVER" => "file",
   "BROADCAST_CONNECTION" => "log",
 ];
 foreach ($vals as $k => $v) {
@@ -519,6 +523,11 @@ if ! timeout 900 npm run build >>"$APT_LOG" 2>&1; then
   err "npm run build fehlgeschlagen – letzte Logzeilen:"; tail -n 20 "$APT_LOG" >&2 || true; exit 1
 fi
 log "Assets gebaut: $(ls public/build 2>/dev/null | wc -l) Einträge"
+if [ ! -f "public/build/manifest.json" ]; then
+  err "Vite-Manifest fehlt (public/build/manifest.json) – Laravel würde mit 500 antworten."
+  err "Inhalt von public/build: $(ls -A public/build 2>/dev/null | tr '\n' ' ')"
+  exit 1
+fi
 
 log "=== NexoPOS Setup (CLI, headless) ==="
 # ns:setup ist idempotent (Helper::installed() prüft nexopos_options-Tabelle).
@@ -644,8 +653,11 @@ for i in $(seq 1 45); do
   if [ "$code" = "200" ] || [ "$code" = "302" ]; then log "HTTP / = ${code}"; break; fi
   if [ "$i" = "45" ]; then
     err "App wurde nicht erreichbar (letzter Code: ${code:-000})"
-    echo "--- nginx error.log ---" >&2; tail -n 30 /var/log/nginx/error.log >&2 2>/dev/null || true
-    echo "--- journalctl php8.4-fpm ---" >&2; journalctl -u php8.4-fpm -n 30 --no-pager >&2 2>/dev/null || true
+    echo "--- Laravel-Log (letzte 30 Zeilen) ---" >&2
+    tail -n 30 "$APP_DIR/storage/logs/laravel.log" >&2 2>/dev/null || echo "(kein laravel.log)" >&2
+    echo "--- Rechte storage/bootstrap-cache ---" >&2
+    ls -ld "$APP_DIR/storage" "$APP_DIR/storage/logs" "$APP_DIR/bootstrap/cache" >&2 2>/dev/null || true
+    echo "--- nginx error.log ---" >&2; tail -n 15 /var/log/nginx/error.log >&2 2>/dev/null || true
     exit 1
   fi
   sleep 2

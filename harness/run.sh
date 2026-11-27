@@ -469,6 +469,7 @@ if [[ "${1:-}" == "run" && "${2:-}" == "build" ]]; then
     mkdir -p public/build/assets
     echo "body{}" > public/build/assets/app.css
     echo "//bundle" > public/build/assets/app.js
+    printf '{"resources/js/app.js":{"file":"assets/app.js"}}\n' > public/build/manifest.json
 fi
 exit 0
 EOF
@@ -567,8 +568,9 @@ if [[ "${1:-}" == "-r" || "${1:-}" == "-d" ]]; then
               [[ -f "$HS/env_empty" ]] && echo "DB_DATABASE=" > /dev/null
               echo "DB_USERNAME=${NX_DB_USER:-}"
               echo "DB_PASSWORD=${NX_DB_PASS:-}"
-              echo "QUEUE_CONNECTION=database"
-              echo "SESSION_DRIVER=database"
+              echo "QUEUE_CONNECTION=sync"
+              echo "CACHE_STORE=file"
+              echo "SESSION_DRIVER=file"
             } > .env
             if [[ -f "$HS/env_empty" ]]; then
                 sed -i 's/^DB_\(DATABASE\|USERNAME\|PASSWORD\)=.*/DB_\1=/' .env
@@ -766,6 +768,9 @@ assert_fcontains "$MK/opt/nexopos/.env" "DB_DATABASE=nexopos"
 assert_fcontains "$MK/opt/nexopos/.env" "DB_USERNAME=nexopos"
 assert_fregex "$MK/opt/nexopos/.env" "^DB_PASSWORD=.+"
 assert_fcontains "$MK/opt/nexopos/.env" "APP_ENV=production"
+assert_fcontains "$MK/opt/nexopos/.env" "SESSION_DRIVER=file"
+assert_fcontains "$MK/opt/nexopos/.env" "QUEUE_CONNECTION=sync"
+assert_file "$MK/opt/nexopos/public/build/manifest.json"
 assert_file "$MK/opt/nexopos/public/build/assets/app.css"
 assert_file "$MK/etc/nginx/sites-available/nexopos"
 assert_fcontains "$MK/etc/nginx/sites-available/nexopos" "fastcgi_pass unix:"
@@ -799,6 +804,19 @@ assert_out "nicht 'running'"
 assert_out "pct destroy"
 
 # ── Install: Fehlerpfade ───────────────────────────────────────────────────
+t "Installer: gerendertes In-Container-Script ist syntaktisch gueltig"
+python3 - "$SCRIPT" "$CUR_DIR/inner.sh" <<'PYCHECK'
+import re, sys, io
+src = io.open(sys.argv[1], encoding="utf-8").read()
+m = re.search(r"cat <<'INNEREOF'\n(.*?)\nINNEREOF\n", src, re.S)
+io.open(sys.argv[2], "w", encoding="utf-8").write(m.group(1))
+PYCHECK
+if bash -n "$CUR_DIR/inner.sh" 2>"$CUR_DIR/inner.err"; then
+    pass "bash -n auf dem gerenderten Inner-Script"
+else
+    fail "Inner-Script hat Syntaxfehler" "$(cat "$CUR_DIR/inner.err")"
+fi
+
 t "Install: leere DB-Werte in .env → harter Abbruch (Access-Denied verhindert)"
 reset_state
 touch "$HS/env_empty"

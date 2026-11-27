@@ -78,7 +78,7 @@ lizenziert und sind nicht im Repo. Der Installer ändert daran nichts.
 ## Tests
 
 ```bash
-bash harness/run.sh     # 83 Assertions, Mock-Proxmox (unshare -rm)
+bash harness/run.sh     # 87 Assertions, Mock-Proxmox (unshare -rm)
 ```
 
 Der Harness mockt `pct/pveam/pvesh`, apt, systemd, MariaDB, PHP, Composer,
@@ -98,6 +98,11 @@ Alle Netz-Schritte haben harte Zeitlimits und schreiben in `/var/log/nexopos-apt
 (30 min), `npm install`/`npm run build` (30/15 min), Downloads mit `--max-time`.
 Vor jedem Schritt steht eine Fortschrittszeile („apt: installiere …"), damit ein
 hängender Lauf sofort als solcher erkennbar ist.
+
+`.env` nutzt die Upstream-Treiber (`SESSION_DRIVER=file`, `CACHE_STORE=file`,
+`QUEUE_CONNECTION=sync`): `database` würde 500er produzieren, weil NexoPOS die
+Framework-Tabellen `sessions`/`cache` nicht migriert. Nach dem Build wird
+`public/build/manifest.json` geprüft (fehlt es, antwortet Laravel mit 500).
 
 Die `.env` bekommt ihre DB-Werte als explizite Env-Variablen übergeben (nicht per
 `getenv` auf Shell-Variablen) und wird anschließend geprüft: leere `DB_DATABASE`/
