@@ -250,6 +250,25 @@ set -Eeuo pipefail
 log(){ echo "[$(date '+%H:%M:%S')] $*"; }
 err(){ echo "[FEHLER] $*" >&2; }
 warn_inner(){ echo "[WARNUNG] $*" >&2; }
+# apt mit hartem Zeitlimit: im Live-Lauf hing `apt-get install composer` stumm
+# (zähes DNS im CT, kein Fortschritt sichtbar). Jetzt: Logdatei, Timeout,
+# Lock-Timeout und bei Fehlschlag die letzten Zeilen im Klartext.
+APT_LOG="/var/log/nexopos-apt.log"
+: > "$APT_LOG" 2>/dev/null || true
+apt_install() {
+  local tag="$1"; shift
+  log "apt: installiere ${tag} ..."
+  if ! timeout 900 apt-get install -y -qq --no-install-recommends \
+      -o DPkg::Lock::Timeout=120 \
+      -o Acquire::http::Timeout=25 -o Acquire::https::Timeout=25 \
+      -o Acquire::Retries=2 \
+      "$@" >>"$APT_LOG" 2>&1; then
+    warn_inner "apt-Install (${tag}) fehlgeschlagen oder Timeout – letzte Logzeilen:"
+    tail -n 6 "$APT_LOG" >&2 || true
+    return 1
+  fi
+  return 0
+}
 trap 'echo "[FEHLER] Exit $? in Zeile $LINENO" >&2' ERR
 
 PORT="${PORT:-8080}"
@@ -277,13 +296,16 @@ for _p in /usr/local/sbin /usr/local/bin; do
     *) export PATH="${PATH:-}${PATH:+:}$_p" ;;
   esac
 done
-apt-get update -qq
-apt-get install -y -qq --no-install-recommends \
+log "apt: update ..."
+timeout 300 apt-get update -qq \
+  -o Acquire::http::Timeout=25 -o Acquire::https::Timeout=25 \
+  -o Acquire::Retries=2 >>"$APT_LOG" 2>&1 || warn_inner "apt-get update mit Problemen (weiter)"
+apt_install "basis-pakete" \
   curl wget ca-certificates gnupg lsb-release openssl \
   php-fpm php-cli php-mysql php-mbstring php-intl \
   php-curl php-gd php-zip php-bcmath php-xml \
   mariadb-server mariadb-client nginx \
-  git unzip >/dev/null
+  git unzip || { err "Basis-Pakete fehlen – Setup nicht möglich."; exit 1; }
 
 log "=== Node.js (einmaliger Asset-Build) ==="
 # Nur für den Vite-Build nötig, kein Laufzeitbedarf der App.
@@ -299,8 +321,7 @@ node_major() {
 NODE_OK=0
 [ "$(node_major)" -ge 20 ] && NODE_OK=1
 if [ "$NODE_OK" -eq 0 ]; then
-  log "installiere nodejs/npm aus dem Debian-Repo ..."
-  apt-get install -y -qq --no-install-recommends nodejs npm >/dev/null 2>&1 || true
+  apt_install "nodejs+npm" nodejs npm || true
   [ "$(node_major)" -ge 20 ] && NODE_OK=1
 fi
 if [ "$NODE_OK" -eq 0 ]; then
@@ -309,6 +330,7 @@ if [ "$NODE_OK" -eq 0 ]; then
   case "$ARCH" in amd64) NARCH=x64;; arm64) NARCH=arm64;; *) NARCH=x64;; esac
   mkdir -p /opt/node24
   curl -fsSL --retry 3 --retry-delay 3 \
+    --connect-timeout 20 --max-time 600 \
     "https://nodejs.org/dist/v24.11.1/node-v24.11.1-linux-${NARCH}.tar.xz" -o /tmp/node.tar.xz
   tar -xJf /tmp/node.tar.xz -C /opt/node24 --strip-components=1
   for b in node npm npx; do ln -sf "/opt/node24/bin/$b" "/usr/local/bin/$b"; done
@@ -370,7 +392,7 @@ log "=== Composer ==="
 # (/usr/bin/composer, Debian 13 = Composer 2.x), danach offizieller Installer und
 # zuletzt composer.phar — jeder Schritt mit Erfolgsprüfung.
 if ! command -v composer >/dev/null 2>&1; then
-  apt-get install -y -qq --no-install-recommends composer unzip >/dev/null 2>&1 || true
+  apt_install "composer+unzip" composer unzip || true
 fi
 if ! command -v composer >/dev/null 2>&1; then
   log "apt-Composer nicht verfügbar – nutze offiziellen Installer ..."
@@ -390,8 +412,8 @@ if ! command -v composer >/dev/null 2>&1; then
 fi
 if ! command -v composer >/dev/null 2>&1; then
   log "Letzter Fallback: composer-stable.phar direkt ..."
-  curl -fsSL --retry 3 --retry-delay 3 https://getcomposer.org/composer-stable.phar \
-    -o /usr/local/bin/composer.phar
+  curl -fsSL --retry 3 --retry-delay 3 --connect-timeout 20 --max-time 300 \
+    https://getcomposer.org/composer-stable.phar -o /usr/local/bin/composer.phar
   printf '#!/bin/sh\nexec php /usr/local/bin/composer.phar "$@"\n' > /usr/local/bin/composer
   chmod +x /usr/local/bin/composer /usr/local/bin/composer.phar
 fi
@@ -402,7 +424,15 @@ if ! command -v composer >/dev/null 2>&1; then
 fi
 log "composer: $(composer --version 2>/dev/null | head -1)"
 cd "$APP_DIR"
-COMPOSER_ALLOW_SUPERUSER=1 composer install --no-dev --prefer-dist --no-interaction --no-progress >/dev/null
+log "composer install (kann einige Minuten dauern) ..."
+if ! timeout 1800 env COMPOSER_ALLOW_SUPERUSER=1 COMPOSER_PROCESS_TIMEOUT=600 \
+    composer install --no-dev --prefer-dist --no-interaction --no-progress \
+    >>"$APT_LOG" 2>&1; then
+  err "composer install fehlgeschlagen oder Timeout – letzte Logzeilen:"
+  tail -n 15 "$APT_LOG" >&2 || true
+  tail -n 15 "$APP_DIR/storage/logs/laravel.log" >&2 2>/dev/null || true
+  exit 1
+fi
 log "composer install fertig."
 
 log "=== .env schreiben ==="
@@ -439,8 +469,17 @@ php artisan storage:link >/dev/null 2>&1 || true
 php artisan config:clear >/dev/null 2>&1 || true
 
 log "=== Frontend-Assets bauen ==="
-npm install --no-audit --no-fund >/dev/null 2>&1 || { log "npm install warn (retry)"; npm install --no-audit --no-fund; }
-npm run build >/dev/null
+log "npm install (Registry-Zugriff, kann dauern) ..."
+if ! timeout 1800 npm install --no-audit --no-fund --fetch-timeout=60000 --fetch-retries=3 \
+    >>"$APT_LOG" 2>&1; then
+  warn_inner "npm install im ersten Versuch fehlgeschlagen – Wiederholung ohne Cache:"
+  timeout 1800 npm install --no-audit --no-fund --fetch-timeout=60000 --fetch-retries=3 || {
+    err "npm install fehlgeschlagen – letzte Logzeilen:"; tail -n 15 "$APT_LOG" >&2 || true; exit 1; }
+fi
+log "npm run build ..."
+if ! timeout 900 npm run build >>"$APT_LOG" 2>&1; then
+  err "npm run build fehlgeschlagen – letzte Logzeilen:"; tail -n 20 "$APT_LOG" >&2 || true; exit 1
+fi
 log "Assets gebaut: $(ls public/build 2>/dev/null | wc -l) Einträge"
 
 log "=== NexoPOS Setup (CLI, headless) ==="
@@ -462,7 +501,7 @@ fi
 # Harte Verifikation: existiert die Options-Tabelle? Sonst war ns:setup ein
 # stiller No-Op (fehlende Pflichtwerte / interaktiver Abbruch) und die UI
 # würde nur den Setup-Wizard zeigen.
-if ! mariadb -N -B -e "SELECT 1 FROM \`${DB_NAME}\`.nexopos_options LIMIT 1" 2>/dev/null | grep -q 1; then
+if ! mariadb -N -B -e "SHOW TABLES FROM ${DB_NAME} LIKE 'nexopos_options'" 2>/dev/null | grep -q nexopos_options; then
   err "NexoPOS-Setup hat die Datenbank nicht initialisiert (Tabelle nexopos_options fehlt)."
   err "Diagnose: php artisan ns:setup --store_name=... --admin_username=... --admin_email=... --admin_password=..."
   exit 1

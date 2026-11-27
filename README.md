@@ -91,6 +91,14 @@ fehlgeschlagener Spawn, fehlende IP, DNS, `--update` (auch gestoppter CT),
 bash -n install/nexopos.sh && shellcheck -S warning install/nexopos.sh harness/run.sh
 ```
 
+## Robustheit gegen zähes Netz
+
+Alle Netz-Schritte haben harte Zeitlimits und schreiben in `/var/log/nexopos-apt.log`
+(im CT): apt mit `DPkg::Lock::Timeout` und `Acquire::*::Timeout`, `composer install`
+(30 min), `npm install`/`npm run build` (30/15 min), Downloads mit `--max-time`.
+Vor jedem Schritt steht eine Fortschrittszeile („apt: installiere …"), damit ein
+hängender Lauf sofort als solcher erkennbar ist.
+
 ## Bekannte Punkte
 
 - **Kein offizielles Docker-Image / Compose** im Upstream-Repo – daher nativer

@@ -94,7 +94,7 @@ ln -sf "$MK/mock-sleep"  "$INNERBIN/sleep"
 # Inner-Fakebin: nacktes Debian simulieren (KEIN curl, KEIN node, KEIN php)
 link_real "$INNERBIN" bash sh env awk sed grep cut head tail tr od seq cat mv cp rm \
     mkdir chmod dirname basename sort uniq printf ls touch readlink stat uname \
-    tee openssl wc ln du find tar xargs gzip gunzip date install dpkg
+    tee openssl wc ln du find tar xargs gzip gunzip date install dpkg timeout
 ln -sf "$MK/mock-aptget"    "$INNERBIN/apt-get"
 ln -sf "$MK/mock-systemctl" "$INNERBIN/systemctl"
 ln -sf "$MK/mock-getent"    "$INNERBIN/getent"
@@ -508,8 +508,8 @@ echo "mariadb $*" >> "$HS/calls.log"
 for a in "$@"; do
     case "$a" in
         *nexopos_options*)
-            [[ -f "$HS/db_init_fail" ]] && exit 0   # leer = nicht initialisiert
-            echo "1"; exit 0 ;;
+            [[ -f "$HS/db_init_fail" ]] && exit 0   # kein Output = Tabelle fehlt
+            echo "nexopos_options"; exit 0 ;;
         "SELECT 1"*) echo "0"; exit 0 ;;
     esac
 done
@@ -756,8 +756,8 @@ assert_fcontains "$MK/etc/nginx/sites-available/nexopos" "fastcgi_pass unix:"
 assert_fregex "$MK/etc/nginx/sites-available/nexopos" "fastcgi_pass unix:/.*php.*-fpm\\.sock"
 
 t "Install: node/composer kommen per apt-first (kein /usr/local-Fallstrick)"
-assert_calls 1 "apt-get install -y -qq --no-install-recommends composer"
-assert_calls 1 "apt-get install -y -qq --no-install-recommends nodejs npm"
+assert_calls 1 "composer unzip"
+assert_calls 1 "nodejs npm"
 assert_no_calls "nodejs.org/dist"
 
 t "Install: pct create bekommt onboot/nesting/unprivileged"
